@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "@dietrichgebert/ponytail",
+    "@xberg-io/opencode-crawlberg",
+    "@xberg-io/opencode-html-to-markdown",
+    "@xberg-io/opencode-liter-llm",
+    "@xberg-io/opencode-tree-sitter-language-pack",
+    "@xberg-io/opencode-xberg",
+    "@hueyexe/opencode-ensemble",
+    "@ulthon/ul-opencode-event",
+    "kibi-opencode",
+    "opencode-host-notify-bridge"
+  ]
+}
