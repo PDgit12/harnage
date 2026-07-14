@@ -7,7 +7,9 @@ import type { HarnessPlan } from "../index";
  * sub-agents. Kept plan-independent where possible to minimize escaping.
  */
 
-export const HARNESS_PROFILES = `// ModelProfile — per-model scaffold adaptation (Engine v3). Resolves the
+export const HARNESS_PROFILES = (
+	overrides: Record<string, unknown> = {},
+) => `// ModelProfile — per-model scaffold adaptation (Engine v3). Resolves the
 // plugged-in model to a profile that reconfigures the whole engine: dispatch
 // mode, tool exposure, decoding discipline, and loop structure. This is what
 // "any model at its best" means concretely — the harness reshapes itself
@@ -37,8 +39,8 @@ function paramSize(model: string): number {
   return m ? Number.parseFloat(m[1]) : 0;
 }
 
-/** Resolve a model name to its scaffold profile. Ordered; first match wins. */
-export function resolveProfile(model: string, contextTokens = 8192): ModelProfile {
+/** Resolve a model name to its size-tier scaffold. Ordered; first match wins. */
+function resolveBase(model: string, contextTokens = 8192): ModelProfile {
   const m = model.toLowerCase();
 
   // Frontier hosted models — strongest tool callers, free-form loop.
@@ -65,6 +67,18 @@ export function resolveProfile(model: string, contextTokens = 8192): ModelProfil
   // Mid models (7-8B) and unknown: plan-act + constrained JSON (safe default).
   return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 5,
     editFormat: "whole-file", systemPromptBudget: 2400, temperature: 0.1, repeatPenalty: 1.1, nudge: false, contextTokens };
+}
+
+// Per-model curation baked at build time — tunes the SPECIFIC chosen model on
+// top of its size-tier default (a coder gets precise edits; a proven native
+// tool-caller earns the free loop). Empty unless a catalog model was picked.
+const BAKED_OVERRIDES: Record<string, Partial<ModelProfile>> = ${JSON.stringify(overrides)};
+
+/** Resolve a model to its profile, then merge any baked per-model curation. */
+export function resolveProfile(model: string, contextTokens = 8192): ModelProfile {
+  const base = resolveBase(model, contextTokens);
+  const ov = BAKED_OVERRIDES[model.toLowerCase()];
+  return ov ? { ...base, ...ov } : base;
 }
 `;
 

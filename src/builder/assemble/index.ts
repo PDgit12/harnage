@@ -98,7 +98,10 @@ export async function assembleAndVerify(
 	await writeFile(join(outputDir, "SECURITY.md"), SECURITY_MD_TEMPLATE(plan));
 
 	// Harness subsystems: engine + compaction, permissions, skills, session, sub-agents
-	await writeFile(join(srcDir, "profiles.ts"), HARNESS_PROFILES);
+	await writeFile(
+		join(srcDir, "profiles.ts"),
+		HARNESS_PROFILES(plan.modelProfileOverrides ?? {}),
+	);
 	await writeFile(join(srcDir, "pipeline.ts"), PIPELINE_TEMPLATE(plan));
 	await writeFile(join(srcDir, "engine.ts"), ENGINE_TEMPLATE(plan));
 	await writeFile(join(srcDir, "compaction.ts"), HARNESS_COMPACTION);
