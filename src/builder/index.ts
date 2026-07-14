@@ -4,6 +4,11 @@ import { buildSystemPrompt, DEFAULT_BLOCKS } from "../services/system-prompt";
 import type { BuildResult } from "./assemble";
 import { assembleAndVerify } from "./assemble";
 import type { AskFn } from "./llm/interview";
+import {
+	classifyDomain,
+	maxParamsForRam,
+	recommendModels,
+} from "./models/catalog";
 import type { StructuredSpec } from "./spec";
 import { parseIntent, validateAgentPrompt } from "./spec";
 import { analyzeProject } from "./spec/context";
@@ -223,35 +228,46 @@ export async function buildHarness(
 							m.name.match(/(\d+(?:\.\d+)?)b/i)?.[1] ??
 							"0",
 					);
-				if (candidates.length) {
-					// Speed-first caps, not fits-in-RAM: 16GB→8B, 32GB→14B, 64GB→33B, 96GB+→70B.
-					const { totalmem } = await import("node:os");
-					const ramGb = totalmem() / 1024 ** 3;
-					const maxParams =
-						ramGb >= 96
-							? 70
-							: ramGb >= 64
-								? 33
-								: ramGb >= 32
-									? 14
-									: ramGb >= 16
-										? 8
-										: 4;
-					const fitting = candidates.filter((m) => size(m) <= maxParams);
-					const pool = fitting.length ? fitting : candidates;
-					const bySize = [...pool].sort((a, b) => size(b) - size(a));
-					const names = candidates.map((m) => m.name);
-					if (options?.ask) {
+				const { totalmem } = await import("node:os");
+				const ramGb = totalmem() / 1024 ** 3;
+				const installedNames = candidates.map((m) => m.name);
+
+				if (options?.ask) {
+					// Curated recommendation: best models for this agent's domain at
+					// this RAM — including ones not yet installed (with a pull hint),
+					// not just what happens to be on the machine.
+					const domain = classifyDomain(`${plan.description} ${plan.name}`);
+					const recs = recommendModels(domain, ramGb, installedNames).slice(
+						0,
+						6,
+					);
+					if (recs.length) {
+						const menu = recs
+							.map(
+								(r, i) =>
+									`  ${i + 1}) ${r.id}  ~${r.ramGb}GB  ${r.installed ? "[installed]" : `[run: ollama pull ${r.id}]`}  ${r.note}`,
+							)
+							.join("\n");
+						const def = (recs.find((r) => r.installed) ?? recs[0]).id;
 						const answer = await options.ask(
-							`Which local model should this harness default to? (usable on ${Math.round(ramGb)}GB RAM: ${pool.map((m) => m.name).join(", ")})`,
-							bySize[0].name,
+							`Recommended models for a ${domain} agent on ${Math.round(ramGb)}GB RAM:\n${menu}\n  Pick a number or model name`,
+							def,
 						);
-						plan.defaultLocalModel = names.includes(answer)
-							? answer
-							: bySize[0].name;
-					} else {
-						plan.defaultLocalModel = bySize[0].name;
+						const num = Number.parseInt(answer.trim(), 10);
+						plan.defaultLocalModel =
+							Number.isFinite(num) && num >= 1 && num <= recs.length
+								? recs[num - 1].id
+								: answer.trim() || def;
 					}
+				} else if (candidates.length) {
+					// Non-interactive: largest installed model that fits the RAM tier.
+					const fitting = candidates.filter(
+						(m) => size(m) <= maxParamsForRam(ramGb),
+					);
+					const pool = fitting.length ? fitting : candidates;
+					plan.defaultLocalModel = [...pool].sort(
+						(a, b) => size(b) - size(a),
+					)[0].name;
 				}
 			}
 		} catch {
