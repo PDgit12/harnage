@@ -410,7 +410,7 @@ interface ToolUse { name: string; input: Record<string, unknown>; id: string; }
 export class SafetyMonitor {
   private failures = 0;
 
-  check(iteration: number, maxIterations = 20, maxFailures = 3): { shouldStop: boolean; reason?: string } {
+  check(iteration: number, maxIterations = 20, maxFailures = 5): { shouldStop: boolean; reason?: string } {
     if (iteration > maxIterations) return { shouldStop: true, reason: "Exceeded max iterations" };
     if (this.failures >= maxFailures) return { shouldStop: true, reason: "Too many consecutive failures" };
     return { shouldStop: false };
@@ -514,7 +514,11 @@ const DECISION_RULES =
   'You act by returning ONE JSON object and nothing else. ' +
   'To use a tool: {"action":"tool","tool":"<name>","args":{...}}. ' +
   'To give your final answer: {"action":"final","answer":"<text>"}. ' +
-  'Do NOT describe what you will do — return the tool action. One tool per turn.';
+  'Do NOT describe what you will do — return the tool action. One tool per turn. ' +
+  'NEVER answer from memory or guess a result — you MUST use a tool to inspect or ' +
+  'change real files before answering. ' +
+  'Example — to read a file, return exactly: ' +
+  '{"action":"tool","tool":"file_read","args":{"path":"src/index.ts"}}';
 
 // Plan-act: force a numbered step list before execution (Agentless principle —
 // structure beats free-form autonomy for mid models).
@@ -566,6 +570,9 @@ export async function* streamProvider(
       : { max_tokens: config.maxTokens, temperature }),
   };
   if (tools?.length) body.tools = tools;
+  // Keep the model resident between turns so it isn't cold-reloaded into RAM/VRAM
+  // on every call — the single biggest felt-latency win for local agentic loops.
+  if (isOllama) body.keep_alive = "10m";
   // Constrained decoding: force the reply to match a JSON schema. Ollama uses
   // \`format\`; OpenAI-compatible hosts use \`response_format\` json_schema. Under
   // either, the model physically cannot emit malformed JSON.
@@ -762,7 +769,11 @@ export class LoopEngine {
 
       const assistantMsg: Record<string, unknown> = { role: "assistant", content: fullText };
       if (calls.length) {
-        assistantMsg.tool_calls = calls.map(c => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.input) } }));
+        // Echoed tool_calls: Ollama /api/chat wants arguments as an OBJECT;
+        // OpenAI-compatible hosts want a JSON STRING. Sending the wrong one makes
+        // Ollama 400 ("looks like object, can't find closing '}'") on the next turn.
+        const asObject = this.config.type === "ollama";
+        assistantMsg.tool_calls = calls.map(c => ({ id: c.id, type: "function", function: { name: c.name, arguments: asObject ? c.input : JSON.stringify(c.input) } }));
       }
       this.messages.push(assistantMsg);
 
@@ -840,6 +851,8 @@ export class LoopEngine {
       return \`- \${t.name}(\${params}): \${t.description}\`;
     }).join("\\n");
     const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty };
+    let toolsUsed = 0;
+    let actNudged = false;
 
     while (true) {
       iteration++;
@@ -872,6 +885,16 @@ export class LoopEngine {
       this.nudged = false;
 
       if (decision.action === "final") {
+        // Act-before-answer: a small model often answers from memory on turn 1
+        // without ever calling a tool (its #1 task-following failure). If it
+        // finalizes before touching a single tool, push back once.
+        if (toolsUsed === 0 && !actNudged && this.tools.length > 0) {
+          actNudged = true;
+          this.onEvent?.({ type: "status", content: "pushing model to use a tool" });
+          this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+          this.messages.push({ role: "user", content: "You have not used any tool yet. Do not answer from memory — call the appropriate tool to inspect or change the real files first, then finish." });
+          continue;
+        }
         const answer = decision.answer ?? "";
         this.messages.push({ role: "assistant", content: answer });
         if (this.persistSession) await saveSession(this.messages);
@@ -880,6 +903,7 @@ export class LoopEngine {
 
       const name = decision.tool ?? "";
       const args = decision.args ?? {};
+      toolsUsed++;
       this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
       this.onEvent?.({ type: "tool_use", toolName: name, toolInput: args });
 

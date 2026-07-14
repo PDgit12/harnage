@@ -44,8 +44,9 @@ const TASKS: Task[] = [
 	},
 	{
 		id: "T3 multi-step",
+		// big.ts is the largest .ts file; naming it proves the model found the largest.
 		goal: "Find the largest .ts file in the current directory and show its first few lines.",
-		check: (o) => /LARGEST/.test(o),
+		check: (o) => /LARGEST/.test(o) || /big\.ts/.test(o),
 	},
 	{
 		id: "T4 write path",
@@ -58,7 +59,7 @@ const TASKS: Task[] = [
 		id: "T5 recovery",
 		goal: "Read the file does-not-exist-42.ts and summarize it.",
 		check: (o) =>
-			/not (be )?(found|exist)|no such|does ?n'?t exist|could ?n'?t|couldn't|unable|cannot|can't find/i.test(
+			/no (such )?file|not (be )?(found|exist)|does ?n'?t exist|could ?n'?t|couldn't|unable|cannot|can't find|isn'?t (there|present)/i.test(
 				o,
 			),
 	},
@@ -94,10 +95,31 @@ const buildRoot = await mkdtemp(join(tmpdir(), "bench-build-"));
 const fixture = await mkdtemp(join(tmpdir(), "bench-fixture-"));
 writeFixture(fixture);
 
-console.log(`\nBuilding a generated harness (offline chassis)…`);
+// Optional: build with a strong local model so the PLAN stage bakes real
+// pipeline stages (the small-tier moat). Offline default = empty pipeline.
+const buildModel = process.env.BENCH_BUILD_MODEL;
+let buildProvider: Parameters<typeof buildHarness>[3] | undefined;
+if (buildModel) {
+	const { createProvider } = await import("../src/services/api/client");
+	buildProvider = {
+		provider: createProvider({
+			type: "ollama",
+			model: buildModel,
+			baseUrl,
+			maxTokens: 8192,
+			contextTokens: 8192,
+		}),
+		maxRepairs: 1,
+	};
+	console.log(`\nBuilding a generated harness with build-model ${buildModel}…`);
+} else {
+	console.log(`\nBuilding a generated harness (offline chassis)…`);
+}
 const build = await buildHarness(
 	"a codebase analysis and file agent that inspects and edits a project",
 	buildRoot,
+	undefined,
+	buildProvider,
 );
 if (!build.success) {
 	console.error("build failed:", build.errors);
