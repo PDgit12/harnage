@@ -20,6 +20,7 @@ export class OpenAIProvider implements Provider {
 	async *stream(
 		messages: Array<{ role: string; content: string }>,
 		tools?: ToolDefinition[],
+		responseFormat?: Record<string, unknown>,
 	): AsyncGenerator<StreamEvent> {
 		try {
 			const stream = await this.client.chat.completions.create({
@@ -34,6 +35,18 @@ export class OpenAIProvider implements Provider {
 						parameters: t.inputSchema,
 					},
 				})),
+				...(responseFormat
+					? {
+							response_format: {
+								type: "json_schema",
+								json_schema: {
+									name: "decision",
+									strict: true,
+									schema: responseFormat,
+								},
+							} as OpenAI.Chat.ChatCompletionCreateParams["response_format"],
+						}
+					: {}),
 				stream: true,
 			});
 

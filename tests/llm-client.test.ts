@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { Provider } from "../src/services/api/client";
-import { completeText } from "../src/services/api/complete";
 import {
 	completeJSON,
 	extractJSON,
 	JSONCompletionError,
 } from "../src/builder/llm/client";
+import type { Provider } from "../src/services/api/client";
+import { completeText } from "../src/services/api/complete";
 
 /** Provider that replays canned responses, one per stream() call. */
 function mockProvider(
@@ -83,13 +83,13 @@ describe("extractJSON", () => {
 
 	it("strips markdown fences", () => {
 		expect(extractJSON('```json\n{"a":1}\n```')).toBe('{"a":1}');
-		expect(extractJSON('```\n[1,2]\n```')).toBe("[1,2]");
+		expect(extractJSON("```\n[1,2]\n```")).toBe("[1,2]");
 	});
 
 	it("extracts JSON wrapped in prose", () => {
-		expect(extractJSON('Sure! Here is the JSON:\n{"a":1}\nHope it helps.')).toBe(
-			'{"a":1}',
-		);
+		expect(
+			extractJSON('Sure! Here is the JSON:\n{"a":1}\nHope it helps.'),
+		).toBe('{"a":1}');
 	});
 });
 

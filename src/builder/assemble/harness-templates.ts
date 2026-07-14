@@ -125,9 +125,9 @@ export const HARNESS_PERMISSIONS = (
 // Rules live in ~/.${plan.name}/permissions.json:
 //   { "mode": "default", "rules": [ { "pattern": "bash(bun *)", "allow": true },
 //                                    { "pattern": "file_write(src/**)", "allow": true } ] }
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface PermissionRule { pattern: string; allow: boolean; }
 export interface PermissionPolicy {
@@ -146,6 +146,14 @@ export function loadPolicy(): PermissionPolicy {
     } catch { /* fall through */ }
   }
   return { mode: "default", rules: [] };
+}
+
+/** Persist the policy (used when the user picks "always" on a permission prompt). */
+export function savePolicy(policy: PermissionPolicy): void {
+  try {
+    mkdirSync(dirname(POLICY_PATH), { recursive: true });
+    writeFileSync(POLICY_PATH, JSON.stringify(policy, null, 2));
+  } catch { /* best-effort persistence */ }
 }
 
 /** Convert "tool(glob)" pattern to a matcher. "*" matches within a segment, "**" matches across. */
@@ -374,7 +382,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Tool, ToolContext } from "./Tool.ts";
 import { compactMessages, estimateTokens } from "./compaction.ts";
-import { checkPermission, loadPolicy, type PermissionPolicy } from "./permissions.ts";
+import { checkPermission, loadPolicy, type PermissionPolicy, savePolicy, targetOf } from "./permissions.ts";
 import { PIPELINE } from "./pipeline.ts";
 import { type ModelProfile, resolveProfile } from "./profiles.ts";
 import { saveSession } from "./session.ts";
@@ -556,9 +564,13 @@ export async function* streamProvider(
       : { max_tokens: config.maxTokens, temperature }),
   };
   if (tools?.length) body.tools = tools;
-  // Ollama grammar-constrained decoding: force the reply to match a JSON schema.
-  // A small model physically cannot emit malformed JSON under this constraint.
-  if (opts?.format !== undefined && isOllama) body.format = opts.format;
+  // Constrained decoding: force the reply to match a JSON schema. Ollama uses
+  // \`format\`; OpenAI-compatible hosts use \`response_format\` json_schema. Under
+  // either, the model physically cannot emit malformed JSON.
+  if (opts?.format !== undefined) {
+    if (isOllama) body.format = opts.format;
+    else body.response_format = { type: "json_schema", json_schema: { name: "decision", strict: true, schema: opts.format } };
+  }
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.apiKey) headers["Authorization"] = \`Bearer \${config.apiKey}\`;
@@ -642,6 +654,9 @@ export interface EngineConfig {
   profile?: ModelProfile;
   /** Live progress callback — lets a TUI stream text and tool activity. */
   onEvent?: (event: EngineEvent) => void;
+  /** Interactive permission gate. Called when a tool is denied by policy in
+   * default mode; the UI resolves allow (once) / deny / always (remember). */
+  onPermissionRequest?: (req: { tool: string; input: unknown; reason: string }) => Promise<"allow" | "deny" | "always">;
 }
 
 export class LoopEngine {
@@ -655,6 +670,7 @@ export class LoopEngine {
   private policy: PermissionPolicy;
   private profile: ModelProfile;
   private onEvent?: (event: EngineEvent) => void;
+  private onPermissionRequest?: EngineConfig["onPermissionRequest"];
   private nudged = false;
 
   constructor(config: EngineConfig) {
@@ -663,6 +679,7 @@ export class LoopEngine {
     this.skills = config.skills ?? [];
     this.persistSession = config.persistSession ?? true;
     this.onEvent = config.onEvent;
+    this.onPermissionRequest = config.onPermissionRequest;
     this.policy = config.policy ?? loadPolicy();
     this.profile = config.profile ?? resolveProfile(this.config.model, this.config.contextTokens);
     this.messages = config.initialMessages ? [...config.initialMessages] : [];
@@ -777,8 +794,8 @@ export class LoopEngine {
         if (!tool) {
           output = \`Tool '\${call.name}' not found\`;
         } else {
-          const permission = checkPermission(this.policy, call.name, call.input);
-          if (!permission.allowed) {
+          const permission = await this.resolveToolPermission(call.name, call.input);
+          if (!permission.ok) {
             output = \`Permission denied: \${permission.reason}\`;
             this.safety.recordFailure();
           } else {
@@ -873,8 +890,8 @@ export class LoopEngine {
         output = \`Tool '\${name}' not found. Available: \${selected.map(t => t.name).join(", ")}\`;
         this.safety.recordFailure();
       } else {
-        const permission = checkPermission(this.policy, name, args);
-        if (!permission.allowed) {
+        const permission = await this.resolveToolPermission(name, args);
+        if (!permission.ok) {
           output = \`Permission denied: \${permission.reason}\`;
           this.safety.recordFailure();
         } else {
@@ -944,6 +961,31 @@ export class LoopEngine {
     return this.runDecisionLoop(goal);
   }
 
+  /** Permission gate with interactive escalation. A denial in default mode is
+   * offered to the UI (allow once / deny / always). "always" persists a
+   * conservative rule so the prompt never repeats for that target. */
+  private async resolveToolPermission(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; reason?: string }> {
+    const verdict = checkPermission(this.policy, name, args);
+    if (verdict.allowed) return { ok: true };
+    if (!this.onPermissionRequest || this.policy.mode !== "default") {
+      return { ok: false, reason: verdict.reason };
+    }
+    const choice = await this.onPermissionRequest({ tool: name, input: args, reason: verdict.reason ?? "needs approval" });
+    if (choice === "deny") return { ok: false, reason: "denied by user" };
+    if (choice === "always") {
+      const target = targetOf(args);
+      const glob = !target
+        ? "*"
+        : name === "bash"
+          ? target.split(/\\s+/)[0] + " *"
+          : target.split("/")[0] + "/**";
+      this.policy.rules.push({ pattern: name + "(" + glob + ")", allow: true });
+      this.toolContext.permissions.rules = this.policy.rules;
+      savePolicy(this.policy);
+    }
+    return { ok: true };
+  }
+
   private async loadSystemPrompt(): Promise<string> {
     const paths = [
       join(process.cwd(), ".${plan.name}", "system.md"),
@@ -993,6 +1035,16 @@ function toolLabel(name: string | undefined, input: unknown): string {
   return preview ? n + " · " + preview.slice(0, 80) : n;
 }
 
+function permTarget(input: unknown): string {
+  const o = (input ?? {}) as Record<string, unknown>;
+  if (typeof o.command === "string") return o.command;
+  if (typeof o.path === "string") return o.path;
+  if (typeof o.file_path === "string") return o.file_path;
+  return "";
+}
+
+interface PermPrompt { tool: string; target: string; reason: string; resolve: (c: "allow" | "deny" | "always") => void; }
+
 export function App({ config, tools, skills, profile, initialMessages }: AppProps) {
   const { exit } = useApp();
   const [history, setHistory] = useState<HistoryItem[]>([
@@ -1005,12 +1057,19 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const messagesRef = useRef<Array<Record<string, unknown>> | undefined>(initialMessages);
+  const [perm, setPerm] = useState<PermPrompt | null>(null);
 
   const push = useCallback((item: HistoryItem) => {
     setHistory((h) => [...h, item]);
   }, []);
 
-  useInput((_, key) => {
+  useInput((inputCh, key) => {
+    if (perm) {
+      if (inputCh === "a") { perm.resolve("allow"); setPerm(null); }
+      else if (inputCh === "y") { perm.resolve("always"); setPerm(null); }
+      else if (inputCh === "d" || key.escape) { perm.resolve("deny"); setPerm(null); }
+      return;
+    }
     if (key.escape && !busyRef.current) exit();
   });
 
@@ -1042,6 +1101,10 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
           if (current.trim()) { push({ kind: "agent", text: current }); current = ""; setStreamingText(""); }
         }
       },
+      onPermissionRequest: (req) =>
+        new Promise((resolve) => {
+          setPerm({ tool: req.tool, target: permTarget(req.input), reason: req.reason, resolve });
+        }),
     };
     const engine = new LoopEngine(engineConfig);
     try {
@@ -1090,15 +1153,24 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
         </Box>
       )}
 
-      {busy && (
+      {busy && !perm && (
         <Box paddingLeft={1}>
           <Text color="yellow">✳ {activeTool ? "Running " + activeTool + "…" : "Thinking…"}</Text>
         </Box>
       )}
 
+      {perm && (
+        <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingLeft={1} paddingRight={1}>
+          <Text color="yellow">⚠ Permission needed</Text>
+          <Text><Text bold>{perm.tool}</Text>{perm.target ? <Text dimColor> · {perm.target.slice(0, 70)}</Text> : null}</Text>
+          <Text dimColor>{perm.reason}</Text>
+          <Text><Text color="green">[a]</Text> allow once   <Text color="cyan">[y]</Text> always (remember)   <Text color="red">[d]</Text> deny</Text>
+        </Box>
+      )}
+
       <Box borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
         <Text color="cyan">{"❯ "}</Text>
-        <TextInput value={input} onChange={setInput} onSubmit={onSubmit} placeholder={busy ? "working…" : "type a goal · /clear · /exit"} />
+        <TextInput value={input} onChange={setInput} onSubmit={onSubmit} focus={perm === null} placeholder={busy ? "working…" : "type a goal · /clear · /exit"} />
       </Box>
 
       <Box paddingLeft={2} paddingRight={2} justifyContent="space-between">

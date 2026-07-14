@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Provider } from "../src/services/api/client";
 import { runInterview } from "../src/builder/llm/interview";
 import { runLLMPlan } from "../src/builder/llm/plan";
 import type { LLMSpec } from "../src/builder/llm/schemas";
+import type { Provider } from "../src/services/api/client";
 
 function mockProvider(responses: string[]): Provider {
 	let i = 0;
@@ -85,7 +85,14 @@ describe("runLLMPlan", () => {
 		]);
 		const plan = await runLLMPlan(provider, spec);
 		expect(plan.tools).not.toContain("made_up_tool");
-		for (const t of ["bash", "file_read", "glob", "grep", "file_edit", "file_write"]) {
+		for (const t of [
+			"bash",
+			"file_read",
+			"glob",
+			"grep",
+			"file_edit",
+			"file_write",
+		]) {
 			expect(plan.tools).toContain(t);
 		}
 		expect(plan.commands).toContain("re_view");

@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { Tool, ToolContext } from "../src/Tool";
 import type { Provider } from "../src/services/api/client";
 import type { StreamEvent } from "../src/services/api/types";
+import type { Tool, ToolContext } from "../src/Tool";
 import AgentTool from "../src/tools/AgentTool/AgentTool";
 
 function createMockProvider(): Provider {

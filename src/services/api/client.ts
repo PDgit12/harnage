@@ -23,6 +23,8 @@ export interface Provider {
 	stream(
 		messages: Array<{ role: string; content: string }>,
 		tools?: ToolDefinition[],
+		/** JSON schema to constrain the reply (OpenAI-compatible response_format). */
+		responseFormat?: Record<string, unknown>,
 	): AsyncGenerator<StreamEvent>;
 }
 
