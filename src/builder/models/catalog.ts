@@ -15,6 +15,23 @@
 
 export type WorkType = "code" | "data" | "docs" | "review" | "general";
 
+/**
+ * Per-model scaffold curation baked into the generated harness on top of the
+ * size-tier default — so two same-size models are tuned differently (a coder
+ * gets precise edits; a proven native tool-caller gets the free loop). Mirrors
+ * the generated ModelProfile fields; all optional.
+ */
+export interface ProfileOverride {
+	loop?: "free" | "plan-act" | "pipeline";
+	toolCalling?: "native" | "constrained-json";
+	maxTools?: number;
+	editFormat?: "search-replace" | "whole-file";
+	systemPromptBudget?: number;
+	temperature?: number;
+	repeatPenalty?: number;
+	nudge?: boolean;
+}
+
 export interface CatalogEntry {
 	/** Ollama model id — must be pullable as-is. */
 	id: string;
@@ -27,6 +44,8 @@ export interface CatalogEntry {
 	/** One-line rationale shown to the user. */
 	note: string;
 	license: string;
+	/** Scaffold tuning specific to this model, baked into profiles.ts at build. */
+	profileOverrides?: ProfileOverride;
 }
 
 // Curated shortlist. Qwen-heavy on purpose: it leads practical local tool-calling
@@ -55,6 +74,7 @@ export const CATALOG: CatalogEntry[] = [
 		domains: ["code", "review"],
 		note: "Code-specialized at 3B — cheapest real coder",
 		license: "Apache-2.0",
+		profileOverrides: { editFormat: "search-replace", temperature: 0 },
 	},
 	{
 		id: "qwen2.5-coder:7b",
@@ -63,6 +83,8 @@ export const CATALOG: CatalogEntry[] = [
 		domains: ["code", "review"],
 		note: "Best code reasoning that fits 8GB",
 		license: "Apache-2.0",
+		// A tuned coder does precise search/replace edits at temperature 0.
+		profileOverrides: { editFormat: "search-replace", temperature: 0 },
 	},
 	{
 		id: "qwen3:8b",
@@ -71,6 +93,14 @@ export const CATALOG: CatalogEntry[] = [
 		domains: ["general", "code", "data", "docs", "review"],
 		note: "Best all-round local agent — native tool-calling",
 		license: "Apache-2.0",
+		// Proven reliable native tool-caller at 8B — earn the free loop instead of
+		// the safe mid-tier constrained default (curated per-model upgrade).
+		profileOverrides: {
+			loop: "free",
+			toolCalling: "native",
+			maxTools: 8,
+			nudge: true,
+		},
 	},
 	{
 		id: "llama3.1:8b",
@@ -103,6 +133,8 @@ export const CATALOG: CatalogEntry[] = [
 		domains: ["review", "data"],
 		note: "Step-by-step reasoning — good for analysis/review",
 		license: "MIT",
+		// A reasoning model needs room to think and a little sampling warmth.
+		profileOverrides: { systemPromptBudget: 3200, temperature: 0.3 },
 	},
 	{
 		id: "qwen2.5:14b",
@@ -119,6 +151,7 @@ export const CATALOG: CatalogEntry[] = [
 		domains: ["code", "review"],
 		note: "Strongest dense coder for 16–32GB",
 		license: "Apache-2.0",
+		profileOverrides: { editFormat: "search-replace", temperature: 0 },
 	},
 	{
 		id: "deepseek-coder-v2:16b",
@@ -262,4 +295,10 @@ export function recommendModels(
 		.filter((r) => r.params === 0 || r.params <= cap);
 
 	return [...curated, ...inferred];
+}
+
+/** The curated per-model profile overrides for an id, if any (case-insensitive). */
+export function catalogOverrides(id: string): ProfileOverride | undefined {
+	const lower = id.toLowerCase();
+	return CATALOG.find((e) => e.id.toLowerCase() === lower)?.profileOverrides;
 }

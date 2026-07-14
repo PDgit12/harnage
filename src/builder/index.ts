@@ -5,6 +5,7 @@ import type { BuildResult } from "./assemble";
 import { assembleAndVerify } from "./assemble";
 import type { AskFn } from "./llm/interview";
 import {
+	catalogOverrides,
 	classifyDomain,
 	maxParamsForRam,
 	recommendModels,
@@ -23,6 +24,8 @@ export interface HarnessPlan {
 	hasMcp: boolean;
 	/** Local model the generated harness defaults to (detected at build time). */
 	defaultLocalModel?: string;
+	/** Per-model scaffold overrides baked into profiles.ts (keyed by model id). */
+	modelProfileOverrides?: Record<string, unknown>;
 	/** Baked domain pipeline stages for the small-model tier (Engine v3). */
 	pipeline?: Array<{ name: string; instruction: string; tool?: string }>;
 }
@@ -273,6 +276,16 @@ export async function buildHarness(
 		} catch {
 			/* offline or no ollama — generated harness keeps its generic default */
 		}
+	}
+
+	// Bake the chosen model's curated scaffold overrides (catalog models only)
+	// into profiles.ts — per-model tuning, not just size-tier.
+	if (plan.defaultLocalModel) {
+		const ov = catalogOverrides(plan.defaultLocalModel);
+		if (ov)
+			plan.modelProfileOverrides = {
+				[plan.defaultLocalModel.toLowerCase()]: ov,
+			};
 	}
 
 	onProgress?.({ stage: "building", message: "Building harness..." });
