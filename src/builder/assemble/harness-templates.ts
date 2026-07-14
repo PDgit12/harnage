@@ -971,6 +971,19 @@ export class LoopEngine {
     let actNudged = false;
     let verifyChecked = false;
 
+    // Ground small/mid models against real paths up front. Left to themselves
+    // they assume a conventional src/ layout and read (or conclude absence on)
+    // files that aren't there — the dominant domain-task failure. Handing over
+    // the actual cwd filenames once removes the guess.
+    if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
+        !this.messages.some(m => typeof m.content === "string" && m.content.startsWith("Files in the working directory:"))) {
+      try {
+        const entries = (await import("node:fs")).readdirSync(process.cwd());
+        const listing = entries.slice(0, 50).join(", ") + (entries.length > 50 ? ", …" : "");
+        this.messages.unshift({ role: "user", content: \`Files in the working directory: \${listing}. Read paths relative to this directory — do NOT assume a src/ subfolder.\` });
+      } catch { /* fs unavailable — skip grounding */ }
+    }
+
     while (true) {
       iteration++;
       const verdict = this.safety.check(iteration);
