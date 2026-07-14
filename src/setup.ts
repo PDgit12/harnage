@@ -23,7 +23,7 @@ const DEFAULT_MODELS: Record<string, string> = {
 export async function setupWizard(): Promise<ProviderConfig> {
 	const rl = createInterface({ input, output });
 
-	console.log(chalk.bold("AgentForge v0.1.0"));
+	console.log(chalk.bold("harnage v0.1.0"));
 	console.log(chalk.dim("AI Model = Brain. Harness = Hands."));
 	console.log(chalk.dim("Welcome! Let's set up your provider."));
 	console.log("");
@@ -75,7 +75,7 @@ export async function setupWizard(): Promise<ProviderConfig> {
 
 	rl2.close();
 
-	const configDir = join(homedir(), ".agentforge");
+	const configDir = join(homedir(), ".harnage");
 	await mkdir(configDir, { recursive: true });
 	await writeFile(
 		join(configDir, "config.json"),

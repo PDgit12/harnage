@@ -53,7 +53,7 @@ function isWriteToBlockedPath(cmd: string, blocked: string[]): boolean {
 			const p = resolve(m[1]);
 			if (blocked.some((b) => p.startsWith(resolve(b)))) return true;
 		} catch (e) {
-			console.warn("[agentforge]", (e as Error).message);
+			console.warn("[harnage]", (e as Error).message);
 		}
 	}
 	return false;

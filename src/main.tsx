@@ -120,7 +120,7 @@ async function startMcpServer(): Promise<void> {
 	};
 
 	const server = new Server(
-		{ name: "agentforge", version: "0.1.0" },
+		{ name: "harnage", version: "0.1.0" },
 		{ capabilities: { tools: {}, resources: {}, prompts: {} } },
 	);
 
@@ -150,7 +150,7 @@ async function startMcpServer(): Promise<void> {
 	});
 
 	server.setRequestHandler(ListResourcesRequestSchema, async () => {
-		const configDir = join(homedir(), ".agentforge");
+		const configDir = join(homedir(), ".harnage");
 		const projectFiles: Array<{ uri: string; name: string; mimeType: string }> =
 			[];
 		try {
@@ -172,7 +172,7 @@ async function startMcpServer(): Promise<void> {
 		}
 		projectFiles.push({
 			uri: `file://${join(configDir, "config.json")}`,
-			name: ".agentforge/config.json",
+			name: ".harnage/config.json",
 			mimeType: "application/json",
 		});
 		return { resources: projectFiles };
@@ -201,7 +201,7 @@ async function startMcpServer(): Promise<void> {
 		prompts: [
 			{
 				name: "system-prompt",
-				description: "AgentForge system prompt template for harness agents",
+				description: "harnage system prompt template for harness agents",
 				arguments: [
 					{
 						name: "projectName",
@@ -238,7 +238,7 @@ async function startMcpServer(): Promise<void> {
 	server.setRequestHandler(GetPromptRequestSchema, async (req) => {
 		const { name, arguments: args = {} } = req.params;
 		if (name === "system-prompt") {
-			const projectName = (args.projectName as string) || "AgentForge Project";
+			const projectName = (args.projectName as string) || "harnage Project";
 			const projectDescription =
 				(args.projectDescription as string) || "An AI-powered agent harness";
 			return {
@@ -267,7 +267,7 @@ async function startMcpServer(): Promise<void> {
 						role: "user",
 						content: {
 							type: "text",
-							text: `Generate a complete AgentForge harness configuration (.agentforge/config.json) for the following requirement:\n\n**User Description:** ${description}\n\n**Model Providers to Include:** ${providers}\n\nThe config should include:\n1. Model provider configurations with appropriate models\n2. Routing rules (complexity thresholds, fallback chains)\n3. Cost budgets and rate limits\n4. Tool permissions and sandbox settings\n5. Loop engine safety rails (max iterations, timeout, budget)\n\nOutput valid JSON only.`,
+							text: `Generate a complete harnage harness configuration (.harnage/config.json) for the following requirement:\n\n**User Description:** ${description}\n\n**Model Providers to Include:** ${providers}\n\nThe config should include:\n1. Model provider configurations with appropriate models\n2. Routing rules (complexity thresholds, fallback chains)\n3. Cost budgets and rate limits\n4. Tool permissions and sandbox settings\n5. Loop engine safety rails (max iterations, timeout, budget)\n\nOutput valid JSON only.`,
 						},
 					},
 				],
@@ -283,7 +283,7 @@ async function startMcpServer(): Promise<void> {
 const program = new Command();
 
 program
-	.name("agentforge")
+	.name("harnage")
 	.description("AI Model = Brain. Harness = Hands.")
 	.version("0.1.0")
 	.option("--mcp", "Run as MCP server instead of interactive REPL")

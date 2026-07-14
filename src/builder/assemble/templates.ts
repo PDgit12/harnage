@@ -375,7 +375,7 @@ export interface Tool<TInput = Record<string, unknown>, TOutput = unknown> {
 `;
 
 export const GITIGNORE_TEMPLATE = `node_modules/
-.agentforge-build-*/
+.harnage-build-*/
 config.json
 `;
 
@@ -527,9 +527,9 @@ cat ~/.${plan.name}/permissions.json
 
 ## Optional hardening
 
-- \`AGENTFORGE_SANDBOX=docker\` — run every shell command in \`docker run --rm
+- \`HARNAGE_SANDBOX=docker\` — run every shell command in \`docker run --rm
   --network none\`, working dir mounted, no network.
-- \`AGENTFORGE_AUDIT=off\` — disable the audit trail (on by default).
+- \`HARNAGE_AUDIT=off\` — disable the audit trail (on by default).
 `;
 
 export const SECURITY_MD_TEMPLATE = (
@@ -554,7 +554,7 @@ that scans generated code for unexpected hosts.)
 ## Audit trail
 Every run appends to \`~/.${plan.name}/audit.jsonl\` (JSONL, local, never
 transmitted): run boundaries, every tool execution and its target, and
-denied/rejected tool calls. On by default; \`AGENTFORGE_AUDIT=off\` to disable.
+denied/rejected tool calls. On by default; \`HARNAGE_AUDIT=off\` to disable.
 
 ## Permission model — deny-first, policy-as-file
 Tool calls are checked before execution; a tool with no matching allow rule is
@@ -562,7 +562,7 @@ blocked, not run. The policy is a plain inspectable file at
 \`~/.${plan.name}/permissions.json\` your security team can pin to an allow-list.
 
 ## Shell isolation (opt-in)
-\`AGENTFORGE_SANDBOX=docker\` runs every shell command in
+\`HARNAGE_SANDBOX=docker\` runs every shell command in
 \`docker run --rm --network none\` against a pinned image, working directory
 mounted, no network. Commands pass as argv, never interpolated into a host shell.
 

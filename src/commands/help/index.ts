@@ -5,7 +5,7 @@ import { COMMANDS } from "../../commands";
 const handler: LocalCommandHandler = {
 	async call(): Promise<{ value: string }> {
 		const lines: string[] = [];
-		lines.push(chalk.bold("AgentForge v0.1.0"));
+		lines.push(chalk.bold("harnage v0.1.0"));
 		lines.push(chalk.dim("AI Model = Brain. Harness = Hands."));
 		lines.push(
 			chalk.dim(

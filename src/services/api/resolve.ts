@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ProviderConfig } from "./client";
 
-export const CONFIG_DIR = join(homedir(), ".agentforge");
+export const CONFIG_DIR = join(homedir(), ".harnage");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 /**

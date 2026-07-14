@@ -49,7 +49,7 @@ const _tool: Tool<GrepInput, string[]> = {
 							lines.push(`${pathText}:${lineNum}:${lineText}`);
 						}
 					} catch (e) {
-						console.warn("[agentforge]", (e as Error).message);
+						console.warn("[harnage]", (e as Error).message);
 					}
 					if (lines.length >= 100) break;
 				}

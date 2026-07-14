@@ -1,15 +1,15 @@
 {
-  "name": "agentforge",
+  "name": "harnage",
   "module": "src/main.tsx",
   "type": "module",
   "private": true,
   "bin": {
-    "agentforge": "./src/main.tsx"
+    "harnage": "./src/main.tsx"
   },
   "scripts": {
     "dev": "bun --watch src/main.tsx",
     "start": "bun src/main.tsx",
-    "build": "bun build src/main.tsx --compile --outfile agentforge",
+    "build": "bun build src/main.tsx --compile --outfile harnage",
     "lint": "biome check src/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

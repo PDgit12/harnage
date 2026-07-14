@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { LoopState } from "./types";
 
-const LOOP_DIR = join(homedir(), ".agentforge", "loops");
+const LOOP_DIR = join(homedir(), ".harnage", "loops");
 
 export interface LoopSnapshot {
 	id: string;
@@ -50,7 +50,7 @@ export async function saveLoop(state: LoopState): Promise<string> {
 		await Promise.all(
 			toRemove.map((s) =>
 				unlink(snapshotPath(state.id, s.sequence)).catch((e) => {
-					console.warn("[agentforge]", (e as Error).message);
+					console.warn("[harnage]", (e as Error).message);
 				}),
 			),
 		);
@@ -101,7 +101,7 @@ export async function listLoops(): Promise<
 				seen.set(id, { id, goal: snap.goal, timestamp: snap.timestamp, seq });
 			}
 		} catch (e) {
-			console.warn("[agentforge]", (e as Error).message);
+			console.warn("[harnage]", (e as Error).message);
 		}
 	}
 
@@ -116,7 +116,7 @@ export async function deleteLoop(id: string): Promise<void> {
 	await Promise.all(
 		snapshots.map((s) =>
 			unlink(snapshotPath(id, s.sequence)).catch((e) => {
-				console.warn("[agentforge]", (e as Error).message);
+				console.warn("[harnage]", (e as Error).message);
 			}),
 		),
 	);
@@ -151,7 +151,7 @@ async function listSnapshots(id: string): Promise<SnapshotEntry[]> {
 			const snap: LoopSnapshot = JSON.parse(stat);
 			results.push({ sequence: seq, timestamp: snap.timestamp });
 		} catch (e) {
-			console.warn("[agentforge]", (e as Error).message);
+			console.warn("[harnage]", (e as Error).message);
 		}
 	}
 	return results;

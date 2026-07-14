@@ -145,7 +145,7 @@ export function buildSystemPrompt(
 	context?: ProjectContext,
 ): string {
 	const lines: string[] = [];
-	const name = spec?.name ? spec.name.replace(/-/g, " ") : "AgentForge Harness";
+	const name = spec?.name ? spec.name.replace(/-/g, " ") : "harnage Harness";
 	const description = spec?.description ?? "Autonomous AI agent";
 
 	lines.push(`# ${name}`);
@@ -212,12 +212,12 @@ export async function generateSystemMd(
 ): Promise<void> {
 	const { mkdir, writeFile } = await import("node:fs/promises");
 	const { join } = await import("node:path");
-	const dir = join(outputDir, ".agentforge");
+	const dir = join(outputDir, ".harnage");
 	await mkdir(dir, { recursive: true });
 	const content = buildSystemPrompt(
 		blocks,
 		{
-			name: spec.name?.replace(/-/g, " ") ?? "AgentForge Harness",
+			name: spec.name?.replace(/-/g, " ") ?? "harnage Harness",
 			description: spec.purpose,
 			tools: spec.tools,
 			commands: spec.commands,

@@ -15,7 +15,7 @@ import { formatInline } from "./utils/md";
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 function printBanner() {
-	console.log(chalk.cyan(chalk.bold("  ⚙ AgentForge  ")) + chalk.dim("v0.1.0"));
+	console.log(chalk.cyan(chalk.bold("  ⚙ harnage  ")) + chalk.dim("v0.1.0"));
 	console.log(chalk.dim("  ─────────────────────────────────────"));
 	console.log(chalk.dim("  Model = Brain · Harness = Hands"));
 	console.log();
@@ -62,7 +62,7 @@ export async function initEngine(
 	const skills = await loadSkills();
 	const systemPrompt =
 		buildSystemPrompt(DEFAULT_BLOCKS, {
-			name: "agentforge",
+			name: "harnage",
 			description: "AI Model = Brain. Harness = Hands.",
 			tools: allTools.map((t) => t.name),
 		}) + skillsPromptBlock(skills);

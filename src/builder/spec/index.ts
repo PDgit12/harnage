@@ -115,7 +115,7 @@ export function validateAgentPrompt(prompt: string): void {
 		if (pattern.test(lower)) {
 			throw new ValidationError(
 				`"${prompt}" describes a general application, not an AI agent. ` +
-					"AgentForge builds autonomous AI agents — bots that use tools, " +
+					"harnage builds autonomous AI agents — bots that use tools, " +
 					"follow goals, and run in a loop.\n\n" +
 					"Examples of what you CAN build:\n" +
 					"- A code review agent that checks pull requests\n" +

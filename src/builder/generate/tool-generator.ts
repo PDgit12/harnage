@@ -16,20 +16,20 @@ const inputSchema = z.object({
   timeout: z.number().optional().describe("Timeout in milliseconds"),
 });
 
-// Opt-in container isolation. Set AGENTFORGE_SANDBOX=docker to run every command
+// Opt-in container isolation. Set HARNAGE_SANDBOX=docker to run every command
 // inside a throwaway container with no network and only the working dir mounted
-// (image via AGENTFORGE_SANDBOX_IMAGE, default node:20-alpine). The command is
+// (image via HARNAGE_SANDBOX_IMAGE, default node:20-alpine). The command is
 // passed as a single argv element to \`sh -lc <cmd>\`, never interpolated into a
 // host shell, so the host is not exposed to command injection.
 async function runSandboxed(command: string, cwd: string, timeoutMs: number) {
-  const image = process.env.AGENTFORGE_SANDBOX_IMAGE ?? "node:20-alpine";
+  const image = process.env.HARNAGE_SANDBOX_IMAGE ?? "node:20-alpine";
   const args = ["run", "--rm", "--network", "none", "-v", cwd + ":/work", "-w", "/work", image, "sh", "-lc", command];
   try {
     return await execFileAsync("docker", args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
   } catch (e) {
     const err = e as { code?: string };
     if (err.code === "ENOENT") {
-      throw new Error("AGENTFORGE_SANDBOX=docker is set but 'docker' was not found on PATH. Start Colima/Docker Desktop, or unset AGENTFORGE_SANDBOX.");
+      throw new Error("HARNAGE_SANDBOX=docker is set but 'docker' was not found on PATH. Start Colima/Docker Desktop, or unset HARNAGE_SANDBOX.");
     }
     throw e;
   }
@@ -47,7 +47,7 @@ export const BashTool = {
     const cwd = input.cwd ?? process.cwd();
     const timeout = input.timeout ?? 30000;
     const { stdout, stderr } =
-      process.env.AGENTFORGE_SANDBOX === "docker"
+      process.env.HARNAGE_SANDBOX === "docker"
         ? await runSandboxed(input.command, cwd, timeout)
         : await execAsync(input.command, { cwd, timeout, maxBuffer: 10 * 1024 * 1024 });
     if (stderr) console.warn(stderr);
@@ -194,7 +194,7 @@ export const WebFetchTool = {
   isReadOnly: () => true,
   async call(input: { url: string; format?: string }) {
     const res = await fetch(input.url, {
-      headers: { "User-Agent": "AgentForge/1.0" },
+      headers: { "User-Agent": "harnage/1.0" },
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return { error: \`HTTP \${res.status}: \${res.statusText}\` };
