@@ -3,11 +3,12 @@ import { join } from "node:path";
 import type { HarnessPlan } from "../index";
 
 export const toolTemplates: Record<string, string> = {
-	bash: `import { exec } from "node:child_process";
+	bash: `import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const inputSchema = z.object({
   command: z.string().describe("The shell command to execute"),
@@ -15,8 +16,27 @@ const inputSchema = z.object({
   timeout: z.number().optional().describe("Timeout in milliseconds"),
 });
 
+// Opt-in container isolation. Set AGENTFORGE_SANDBOX=docker to run every command
+// inside a throwaway container with no network and only the working dir mounted
+// (image via AGENTFORGE_SANDBOX_IMAGE, default node:20-alpine). The command is
+// passed as a single argv element to \`sh -lc <cmd>\`, never interpolated into a
+// host shell, so the host is not exposed to command injection.
+async function runSandboxed(command: string, cwd: string, timeoutMs: number) {
+  const image = process.env.AGENTFORGE_SANDBOX_IMAGE ?? "node:20-alpine";
+  const args = ["run", "--rm", "--network", "none", "-v", cwd + ":/work", "-w", "/work", image, "sh", "-lc", command];
+  try {
+    return await execFileAsync("docker", args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
+  } catch (e) {
+    const err = e as { code?: string };
+    if (err.code === "ENOENT") {
+      throw new Error("AGENTFORGE_SANDBOX=docker is set but 'docker' was not found on PATH. Start Colima/Docker Desktop, or unset AGENTFORGE_SANDBOX.");
+    }
+    throw e;
+  }
+}
+
 export const BashTool = {
-  name: "Bash",
+  name: "bash",
   description: "Execute shell commands and return output",
   inputSchema,
   isReadOnly: (input: { command: string }) => {
@@ -24,11 +44,12 @@ export const BashTool = {
     return readOnlyCommands.some((cmd) => input.command.startsWith(cmd));
   },
   async call(input: { command: string; cwd?: string; timeout?: number }) {
-    const { stdout, stderr } = await execAsync(input.command, {
-      cwd: input.cwd,
-      timeout: input.timeout ?? 30000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    const cwd = input.cwd ?? process.cwd();
+    const timeout = input.timeout ?? 30000;
+    const { stdout, stderr } =
+      process.env.AGENTFORGE_SANDBOX === "docker"
+        ? await runSandboxed(input.command, cwd, timeout)
+        : await execAsync(input.command, { cwd, timeout, maxBuffer: 10 * 1024 * 1024 });
     if (stderr) console.warn(stderr);
     return { data: stdout, content: stdout || stderr };
   },
@@ -44,7 +65,7 @@ const inputSchema = z.object({
 });
 
 export const FileReadTool = {
-  name: "FileRead",
+  name: "file_read",
   description: "Read the contents of a file",
   inputSchema,
   isReadOnly: () => true,
@@ -67,7 +88,7 @@ const inputSchema = z.object({
 });
 
 export const FileEditTool = {
-  name: "FileEdit",
+  name: "file_edit",
   description: "Edit a file with string replacement",
   inputSchema,
   isReadOnly: () => false,
@@ -92,7 +113,7 @@ const inputSchema = z.object({
 });
 
 export const FileWriteTool = {
-  name: "FileWrite",
+  name: "file_write",
   description: "Write content to a file (creates parent directories)",
   inputSchema,
   isReadOnly: () => false,
@@ -113,7 +134,7 @@ const inputSchema = z.object({
 });
 
 export const GlobTool = {
-  name: "Glob",
+  name: "glob",
   description: "Find files matching a glob pattern",
   inputSchema,
   isReadOnly: () => true,
@@ -144,7 +165,7 @@ const inputSchema = z.object({
 });
 
 export const GrepTool = {
-  name: "Grep",
+  name: "grep",
   description: "Search file contents with regex",
   inputSchema,
   isReadOnly: () => true,
@@ -167,7 +188,7 @@ const inputSchema = z.object({
 });
 
 export const WebFetchTool = {
-  name: "WebFetch",
+  name: "web_fetch",
   description: "Fetch and render a web page",
   inputSchema,
   isReadOnly: () => true,
@@ -190,7 +211,7 @@ const inputSchema = z.object({
 });
 
 export const WebSearchTool = {
-  name: "WebSearch",
+  name: "web_search",
   description: "Search the web for information",
   inputSchema,
   isReadOnly: () => true,
@@ -220,7 +241,7 @@ const inputSchema = z.object({
 });
 
 export const TestRunnerTool = {
-  name: "TestRunner",
+  name: "test_runner",
   description: "Run tests and collect results",
   inputSchema,
   isReadOnly: () => true,
@@ -256,7 +277,7 @@ const inputSchema = z.object({
 });
 
 export const DockerTool = {
-  name: "Docker",
+  name: "docker",
   description: "Execute Docker commands",
   inputSchema,
   isReadOnly: (input: { command: string }) => ["ps", "images", "info", "version"].includes(input.command),
@@ -281,7 +302,7 @@ const inputSchema = z.object({
 });
 
 export const MCPTool = {
-  name: "MCP",
+  name: "mcp",
   description: "Manage MCP server connections",
   inputSchema,
   isReadOnly: () => true,

@@ -53,7 +53,7 @@ describe("resolveProfile", () => {
 		expect(p.tier).toBe("small");
 		expect(p.loop).toBe("pipeline");
 		expect(p.toolCalling).toBe("constrained-json");
-		expect(p.maxTools).toBe(3);
+		expect(p.maxTools).toBe(4);
 	});
 
 	it("routes known small families without a size tag to small", () => {

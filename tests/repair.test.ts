@@ -2,15 +2,18 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Provider } from "../src/services/api/client";
 import type { BuildResult } from "../src/builder/assemble";
 import type { HarnessPlan } from "../src/builder/index";
+import type { Provider } from "../src/services/api/client";
 
 // Mock verifyBuild so repair tests never run real bun install/tsc.
 const verifyBuildMock = vi.fn();
 vi.mock("../src/builder/assemble", async (importOriginal) => {
 	const mod = await importOriginal<typeof import("../src/builder/assemble")>();
-	return { ...mod, verifyBuild: (...args: unknown[]) => verifyBuildMock(...args) };
+	return {
+		...mod,
+		verifyBuild: (...args: unknown[]) => verifyBuildMock(...args),
+	};
 });
 
 const { repairLoop } = await import("../src/builder/llm/repair");
@@ -62,7 +65,11 @@ afterEach(async () => {
 describe("repairLoop", () => {
 	it("applies a patch inside outputDir and re-verifies", async () => {
 		await writeFile(join(dir, "broken.ts"), "const x: number = 'no';");
-		verifyBuildMock.mockResolvedValue({ success: true, outputDir: dir, errors: [] });
+		verifyBuildMock.mockResolvedValue({
+			success: true,
+			outputDir: dir,
+			errors: [],
+		});
 
 		const provider = mockProvider([
 			patchJSON("broken.ts", "const x: number = 1;"),
@@ -71,7 +78,12 @@ describe("repairLoop", () => {
 			"TypeScript build failed: broken.ts(1,7): error TS2322",
 		]);
 		const { result, repairsUsed } = await repairLoop(
-			provider, plan, first, dir, undefined, 2,
+			provider,
+			plan,
+			first,
+			dir,
+			undefined,
+			2,
 		);
 
 		expect(result.success).toBe(true);
@@ -94,7 +106,12 @@ describe("repairLoop", () => {
 		]);
 		const first = failedResult(dir, ["TypeScript build failed: src/a.ts(1,1)"]);
 		const { result, repairsUsed } = await repairLoop(
-			provider, plan, first, dir, undefined, 2,
+			provider,
+			plan,
+			first,
+			dir,
+			undefined,
+			2,
 		);
 
 		expect(result.success).toBe(false);
@@ -112,7 +129,12 @@ describe("repairLoop", () => {
 			"TypeScript build failed: b.ts(1,1): error TS1109",
 		]);
 		const { result, repairsUsed } = await repairLoop(
-			provider, plan, first, dir, undefined, 2,
+			provider,
+			plan,
+			first,
+			dir,
+			undefined,
+			2,
 		);
 
 		expect(result.success).toBe(false);
@@ -135,7 +157,12 @@ describe("repairLoop", () => {
 			"TypeScript build failed: c.ts(1,1): error TS1109",
 		]);
 		const { result, repairsUsed } = await repairLoop(
-			provider, plan, first, dir, undefined, 3,
+			provider,
+			plan,
+			first,
+			dir,
+			undefined,
+			3,
 		);
 
 		expect(result.success).toBe(true);

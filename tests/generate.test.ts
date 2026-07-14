@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Provider } from "../src/services/api/client";
 import { pascalCase, runGenerate } from "../src/builder/llm/generate";
 import type { LLMSpec } from "../src/builder/llm/schemas";
+import type { Provider } from "../src/services/api/client";
 
 function mockProvider(responses: string[]): Provider {
 	let i = 0;
@@ -22,7 +22,9 @@ const spec: LLMSpec = {
 	tools: ["bash"],
 	commands: ["/help"],
 	models: ["ollama"],
-	customTools: [{ name: "jira_fetch", description: "Fetch a Jira ticket by key" }],
+	customTools: [
+		{ name: "jira_fetch", description: "Fetch a Jira ticket by key" },
+	],
 };
 
 const VALID_CODE = `import { z } from "zod";
