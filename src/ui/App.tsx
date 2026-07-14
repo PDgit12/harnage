@@ -39,7 +39,7 @@ function toolLabel(name: string | undefined, input: unknown): string {
 export function App({ config, engine, branch, resumeState }: AppProps) {
 	const { exit } = useApp();
 	const [history, setHistory] = useState<HistoryItem[]>([
-		{ kind: "info", text: `⚙ AgentForge — ${config.type} · ${config.model}` },
+		{ kind: "info", text: `⚙ harnage — ${config.type} · ${config.model}` },
 		{
 			kind: "info",
 			text: "  /init  build a harness   ·   /help  all commands   ·   or type a goal to run the agent",

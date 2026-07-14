@@ -22,7 +22,7 @@ async function findInDir(dir: string): Promise<McpConfig | null> {
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
 			console.warn(
-				`[agentforge] Failed to read MCP config at ${path}:`,
+				`[harnage] Failed to read MCP config at ${path}:`,
 				e instanceof Error ? e.message : e,
 			);
 		}
@@ -40,7 +40,7 @@ export async function resolveMcpConfig(): Promise<McpConfig> {
 		cwd = dirname(cwd);
 	}
 
-	const userCfg = await findInDir(join(homedir(), ".agentforge"));
+	const userCfg = await findInDir(join(homedir(), ".harnage"));
 	if (userCfg) Object.assign(merged.servers, userCfg.servers);
 
 	return merged;

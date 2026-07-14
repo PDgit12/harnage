@@ -5,7 +5,7 @@ import type { LocalCommandHandler } from "../../commands";
 
 const handler: LocalCommandHandler = {
 	async call(): Promise<{ value: string }> {
-		const dir = join(homedir(), ".agentforge", "sessions");
+		const dir = join(homedir(), ".harnage", "sessions");
 		let files: string[];
 		try {
 			files = await readdir(dir);

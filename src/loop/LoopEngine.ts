@@ -285,7 +285,7 @@ export class LoopEngine {
 				success = false;
 			} else {
 				try {
-					// Path rules from ~/.agentforge/permissions.json take precedence;
+					// Path rules from ~/.harnage/permissions.json take precedence;
 					// no matching rule falls through to the tool's own check.
 					const { ruleVerdict } = await import("../permissions");
 					const permResult =

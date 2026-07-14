@@ -58,7 +58,7 @@ export async function runInterview(
 ): Promise<LLMSpec> {
 	const ctx = contextSummary(opts?.projectContext);
 
-	const questionsPrompt = `You are a requirements analyst for AgentForge, which builds autonomous AI agent harnesses (agents that use tools, follow goals, run in a loop).
+	const questionsPrompt = `You are a requirements analyst for harnage, which builds autonomous AI agent harnesses (agents that use tools, follow goals, run in a loop).
 User request: "${prompt}"
 Project context: ${ctx}
 If the request is specific enough to build from, reply {"ready": true, "questions": []}.
@@ -85,7 +85,7 @@ Respond with ONLY JSON matching: {"ready": boolean, "questions": [{"question": s
 		? `Clarifications:\n${clarifications.map((c) => `Q: ${c.question}\nA: ${c.answer}`).join("\n")}\n`
 		: "";
 
-	const specPrompt = `You are the spec writer for AgentForge. Turn this request into a structured agent spec.
+	const specPrompt = `You are the spec writer for harnage. Turn this request into a structured agent spec.
 User request: "${prompt}"
 ${qaBlock}Project context: ${ctx}
 Rules:

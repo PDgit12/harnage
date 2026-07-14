@@ -43,7 +43,7 @@ export async function runLLMPlan(
 	spec: LLMSpec,
 	_projectContext?: ProjectContext,
 ): Promise<HarnessPlan> {
-	const prompt = `You are the planner for AgentForge. Given this validated spec, produce a harness plan.
+	const prompt = `You are the planner for harnage. Given this validated spec, produce a harness plan.
 Spec:
 ${JSON.stringify(spec, null, 2)}
 Constraints:

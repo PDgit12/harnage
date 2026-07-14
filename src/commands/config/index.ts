@@ -14,7 +14,7 @@ interface ProviderConfig {
 	maxTokens: number;
 }
 
-const CONFIG_DIR = join(homedir(), ".agentforge");
+const CONFIG_DIR = join(homedir(), ".harnage");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 const DEFAULT_MODELS: Record<string, string> = {
@@ -47,7 +47,7 @@ const handler: LocalCommandHandler = {
 			};
 		}
 
-		lines.push(chalk.bold("AgentForge Configuration"));
+		lines.push(chalk.bold("harnage Configuration"));
 		lines.push(chalk.dim(`  Provider: ${chalk.bold(config.type)}`));
 		lines.push(chalk.dim(`  Model: ${chalk.bold(config.model)}`));
 		if (config.apiKey)

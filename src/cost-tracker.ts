@@ -21,7 +21,7 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
 	ollama: { inputPerToken: 0, outputPerToken: 0 },
 };
 
-const COST_FILE = join(homedir(), ".agentforge", "cost.json");
+const COST_FILE = join(homedir(), ".harnage", "cost.json");
 
 export class CostTracker {
 	private sessionUsage = {
@@ -54,7 +54,7 @@ export class CostTracker {
 
 	private persistCost(): void {
 		try {
-			mkdirSync(join(homedir(), ".agentforge"), { recursive: true });
+			mkdirSync(join(homedir(), ".harnage"), { recursive: true });
 			writeFileSync(
 				COST_FILE,
 				JSON.stringify({ cost: this.allTimeCost, tokens: this.allTimeTokens }),

@@ -51,7 +51,7 @@ export class OllamaProvider implements Provider {
 
 			if (!response.ok) {
 				const errorBody = await response.text().catch((e) => {
-					console.warn("[agentforge]", (e as Error).message);
+					console.warn("[harnage]", (e as Error).message);
 					return "";
 				});
 				const error = new Error(
@@ -98,7 +98,7 @@ export class OllamaProvider implements Provider {
 									try {
 										input = JSON.parse(tc.function.arguments ?? "{}");
 									} catch (e) {
-										console.warn("[agentforge]", (e as Error).message);
+										console.warn("[harnage]", (e as Error).message);
 									}
 									yield {
 										type: "tool_use",

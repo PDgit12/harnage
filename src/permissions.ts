@@ -8,10 +8,10 @@ export interface PermissionRule {
 	allow: boolean;
 }
 
-const POLICY_PATH = join(homedir(), ".agentforge", "permissions.json");
+const POLICY_PATH = join(homedir(), ".harnage", "permissions.json");
 
 /**
- * Load the user's permission policy from ~/.agentforge/permissions.json:
+ * Load the user's permission policy from ~/.harnage/permissions.json:
  *   { "mode": "default", "rules": [ { "pattern": "bash(bun *)", "allow": true } ] }
  * Defaults to bypass (current behavior) when no policy file exists — writing
  * a policy file is how a user opts in to path-rule enforcement.

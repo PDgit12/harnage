@@ -19,14 +19,14 @@ export async function buildContext(): Promise<SystemContext> {
 			encoding: "utf-8",
 		}).trim();
 	} catch (e) {
-		console.warn("[agentforge]", (e as Error).message);
+		console.warn("[harnage]", (e as Error).message);
 	}
 
 	let projectFiles: string[] = [];
 	try {
 		projectFiles = (await readdir(cwd)).filter((f) => !f.startsWith("."));
 	} catch (e) {
-		console.warn("[agentforge]", (e as Error).message);
+		console.warn("[harnage]", (e as Error).message);
 	}
 
 	const toolsDir = join(import.meta.dirname, "tools");
@@ -36,11 +36,11 @@ export async function buildContext(): Promise<SystemContext> {
 			f.endsWith("Tool"),
 		);
 	} catch (e) {
-		console.warn("[agentforge]", (e as Error).message);
+		console.warn("[harnage]", (e as Error).message);
 	}
 
 	const systemPrompt = [
-		`You are AgentForge, an AI coding agent operating in ${cwd}.`,
+		`You are harnage, an AI coding agent operating in ${cwd}.`,
 		gitStatus ? `Git status:\n${gitStatus}` : "",
 		`Project files: ${projectFiles.join(", ")}`,
 		`Available tools: ${availableTools.join(", ")}`,

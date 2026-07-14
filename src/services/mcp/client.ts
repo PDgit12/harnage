@@ -25,7 +25,7 @@ export class McpClientManager {
 						env: config.env,
 					});
 
-		const client = new Client({ name: "agentforge", version: "0.1.0" });
+		const client = new Client({ name: "harnage", version: "0.1.0" });
 		await client.connect(transport);
 
 		const toolsResult = await client.listTools();
@@ -55,7 +55,7 @@ export class McpClientManager {
 			await client.close();
 		} catch (e) {
 			console.warn(
-				`[agentforge] Error closing MCP server "${name}":`,
+				`[harnage] Error closing MCP server "${name}":`,
 				e instanceof Error ? e.message : e,
 			);
 		}

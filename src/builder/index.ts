@@ -260,7 +260,7 @@ export async function buildHarness(
 	}
 
 	onProgress?.({ stage: "building", message: "Building harness..." });
-	const outputDir = join(projectCwd, `.agentforge-build-${plan.name}`);
+	const outputDir = join(projectCwd, `.harnage-build-${plan.name}`);
 
 	onProgress?.({ stage: "verifying", message: "Verifying build..." });
 	let result = await assembleAndVerify(plan, outputDir, context, extraFiles);

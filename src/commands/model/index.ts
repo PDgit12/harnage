@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { LocalCommandHandler } from "../../commands";
 import { listOllamaModels } from "../../services/ollama/discovery";
 
-const CONFIG_PATH = join(homedir(), ".agentforge", "config.json");
+const CONFIG_PATH = join(homedir(), ".harnage", "config.json");
 
 interface ProviderConfig {
 	type: "anthropic" | "openai" | "ollama" | "openrouter";
@@ -24,7 +24,7 @@ function loadConfig(): ProviderConfig | null {
 }
 
 function saveConfig(c: ProviderConfig): void {
-	mkdirSync(join(homedir(), ".agentforge"), { recursive: true });
+	mkdirSync(join(homedir(), ".harnage"), { recursive: true });
 	writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2));
 }
 
