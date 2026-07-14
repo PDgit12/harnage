@@ -378,8 +378,9 @@ export const ENGINE_TEMPLATE = (
 	plan: HarnessPlan,
 ) => `// Goal-driven loop engine with compaction, permissions, session persistence,
 // and skills support. Extracted so sub-agents can spawn engines too.
+import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Tool, ToolContext } from "./Tool.ts";
 import { compactMessages, estimateTokens } from "./compaction.ts";
 import { checkPermission, loadPolicy, type PermissionPolicy, savePolicy, targetOf } from "./permissions.ts";
@@ -406,6 +407,19 @@ export interface StreamEvent {
 }
 
 interface ToolUse { name: string; input: Record<string, unknown>; id: string; }
+
+// Append-only local audit trail — the sovereign-deployment control. Records
+// every run boundary, permission decision, and tool execution to a JSONL file
+// that never leaves the machine. On by default; disable with AGENTFORGE_AUDIT=off.
+// Failures are swallowed: auditing must never break or block a run.
+const AUDIT_PATH = join(homedir(), ".${plan.name}", "audit.jsonl");
+function audit(kind: string, data: Record<string, unknown>): void {
+  if (process.env.AGENTFORGE_AUDIT === "off") return;
+  try {
+    mkdirSync(dirname(AUDIT_PATH), { recursive: true });
+    appendFileSync(AUDIT_PATH, JSON.stringify({ ts: new Date().toISOString(), kind, ...data }) + "\\n");
+  } catch { /* audit is best-effort — never throw into the loop */ }
+}
 
 export class SafetyMonitor {
   private failures = 0;
@@ -752,10 +766,12 @@ export class LoopEngine {
   getMessages(): Array<Record<string, unknown>> { return this.messages; }
 
   async run(goal: string): Promise<string> {
+    audit("run_start", { goal: goal.slice(0, 300), model: this.config.model, tier: this.profile.tier });
     this.messages.push({ role: "user", content: goal });
-    const result = await this.dispatch(goal);
+    let result = await this.dispatch(goal);
     // Router fallback: a stuck small/mid loop gets one escalated retry.
-    if (this.shouldEscalate(result)) return this.escalate(goal);
+    if (this.shouldEscalate(result)) result = await this.escalate(goal);
+    audit("run_end", { model: this.config.model, chars: result.length });
     return result;
   }
 
@@ -1111,10 +1127,14 @@ export class LoopEngine {
     const verdict = checkPermission(this.policy, name, args);
     if (verdict.allowed) return { ok: true };
     if (!this.onPermissionRequest || this.policy.mode !== "default") {
+      audit("permission_deny", { tool: name, target: targetOf(args), reason: verdict.reason });
       return { ok: false, reason: verdict.reason };
     }
     const choice = await this.onPermissionRequest({ tool: name, input: args, reason: verdict.reason ?? "needs approval" });
-    if (choice === "deny") return { ok: false, reason: "denied by user" };
+    if (choice === "deny") {
+      audit("permission_deny", { tool: name, target: targetOf(args), reason: "denied by user" });
+      return { ok: false, reason: "denied by user" };
+    }
     if (choice === "always") {
       const target = targetOf(args);
       const glob = !target
@@ -1135,20 +1155,24 @@ export class LoopEngine {
    * of a dead exception. Validation misses are recoverable — they don't count
    * toward the consecutive-failure stop; real exceptions do. */
   private async callToolChecked(tool: Tool, args: Record<string, unknown>): Promise<string> {
+    const target = targetOf(args);
     const parsed = tool.inputSchema.safeParse(args);
     if (!parsed.success) {
       const schema = tool.inputSchema.toJSONSchema?.() as { properties?: Record<string, { type?: string }> } | undefined;
       const sig = schema?.properties
         ? Object.entries(schema.properties).map(([k, v]) => k + ":" + (v?.type ?? "any")).join(", ")
         : "";
+      audit("tool_reject", { tool: tool.name, target, reason: "invalid args" });
       return "Invalid arguments for " + tool.name + ". Expected { " + sig + " }, but you sent " + JSON.stringify(args) + ". Retry with those exact keys.";
     }
     try {
       const r = await tool.call(parsed.data as Record<string, unknown>, this.toolContext);
       this.safety.recordSuccess();
+      audit("tool_call", { tool: tool.name, target, ok: true });
       return r.error ? r.error : r.content ?? JSON.stringify(r.data ?? "");
     } catch (err) {
       this.safety.recordFailure();
+      audit("tool_call", { tool: tool.name, target, ok: false, error: String(err).slice(0, 200) });
       return String(err);
     }
   }
