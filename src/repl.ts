@@ -18,7 +18,16 @@ function printBanner() {
 	console.log(chalk.cyan(chalk.bold("  ⚙ AgentForge  ")) + chalk.dim("v0.1.0"));
 	console.log(chalk.dim("  ─────────────────────────────────────"));
 	console.log(chalk.dim("  Model = Brain · Harness = Hands"));
-	console.log(chalk.dim("  Goal-driven loop · Tool-first execution"));
+	console.log();
+	console.log(
+		"  Type " +
+			chalk.cyan("/init") +
+			chalk.dim(" to build a harness  ·  ") +
+			chalk.cyan("/help") +
+			chalk.dim(" for commands  ·  ") +
+			chalk.cyan("/exit") +
+			chalk.dim(" to quit"),
+	);
 	console.log();
 }
 
@@ -175,8 +184,10 @@ export async function repl(
 				} else {
 					console.log(result.value);
 				}
-			} catch {
-				/* ignore */
+			} catch (err) {
+				console.log(
+					chalk.red(`  ✖ ${err instanceof Error ? err.message : String(err)}`),
+				);
 			}
 			rl.prompt();
 			return;
