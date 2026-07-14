@@ -510,6 +510,43 @@ function parseDecision(raw: string): Decision | null {
   };
 }
 
+/** Small models under grammar sometimes stuff JSON scaffolding into the answer
+ * field (e.g. {"text":"./a.ts":1,...}). Strip that so the user sees prose, not
+ * wire format. Cheap, always-safe: only rewrites when the answer looks like a
+ * JSON artifact; clean prose passes through untouched. */
+function unwrapFinal(answer: string): string {
+  const s = answer.trim();
+  if (!s || !(s.startsWith("{") || s.startsWith("["))) return s;
+  // Well-formed wrapper: pull the human field if present.
+  try {
+    const o = JSON.parse(s) as Record<string, unknown>;
+    for (const k of ["answer", "text", "result", "content", "message", "output"]) {
+      if (typeof o[k] === "string") return (o[k] as string).trim();
+    }
+  } catch { /* fall through to fragment cleanup */ }
+  // Malformed fragment: collapse {"text":"..."} noise into readable pairs.
+  const cleaned = s
+    .replace(/"?(text|answer|result|content|key|value)"?\\s*:/gi, "")
+    .replace(/[{}\\[\\]]/g, "")
+    .replace(/"\\s*,\\s*"/g, ", ")
+    .replace(/"/g, "")
+    .replace(/\\s+/g, " ")
+    .trim();
+  return cleaned || s;
+}
+
+/** True when a final answer reads like wire-format, not prose: starts with a
+ * bracket, carries JSON-ish pairs, or has no two real words in a row. Gates the
+ * restate step so clean answers are never touched. */
+function looksNonProse(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^[{\\[]/.test(t)) return true;
+  if (/":\\s*\\d|"\\s*:\\s*"/.test(t)) return true;
+  if (!/[a-zA-Z]{3,}\\s+[a-zA-Z]{3,}/.test(t)) return true;
+  return false;
+}
+
 const DECISION_RULES =
   'You act by returning ONE JSON object and nothing else. ' +
   'To use a tool: {"action":"tool","tool":"<name>","args":{...}}. ' +
@@ -519,6 +556,11 @@ const DECISION_RULES =
   'change real files before answering. ' +
   'Example — to read a file, return exactly: ' +
   '{"action":"tool","tool":"file_read","args":{"path":"src/index.ts"}}';
+
+// A final answer that asserts absence/failure. Small models emit these
+// prematurely (the #1 grounding error) — trust it only after a tool confirms.
+// No regex backslashes: this lives in a template literal. '.' covers n't/nt.
+const NEGATIVE_CLAIM = /does ?n.?t exist|does not exist|no such file|not found|cannot find|can.?t find|unable to (read|find|locate|open)|not present|isn.?t there|no file named/i;
 
 // Plan-act: force a numbered step list before execution (Agentless principle —
 // structure beats free-form autonomy for mid models).
@@ -666,6 +708,10 @@ export interface EngineConfig {
   /** Interactive permission gate. Called when a tool is denied by policy in
    * default mode; the UI resolves allow (once) / deny / always (remember). */
   onPermissionRequest?: (req: { tool: string; input: unknown; reason: string }) => Promise<"allow" | "deny" | "always">;
+  /** Opt-in escalation: when a small/mid loop gets stuck (safety-stopped,
+   * errored, or empty), retry once with plan-act — and, if set, swap to this
+   * stronger model for the retry. Off by default; no extra RAM unless used. */
+  fallbackModel?: string;
 }
 
 export class LoopEngine {
@@ -681,6 +727,8 @@ export class LoopEngine {
   private onEvent?: (event: EngineEvent) => void;
   private onPermissionRequest?: EngineConfig["onPermissionRequest"];
   private nudged = false;
+  private escalated = false;
+  private fallbackModel?: string;
 
   constructor(config: EngineConfig) {
     this.tools = config.tools;
@@ -691,6 +739,7 @@ export class LoopEngine {
     this.onPermissionRequest = config.onPermissionRequest;
     this.policy = config.policy ?? loadPolicy();
     this.profile = config.profile ?? resolveProfile(this.config.model, this.config.contextTokens);
+    this.fallbackModel = config.fallbackModel;
     this.messages = config.initialMessages ? [...config.initialMessages] : [];
     this.toolContext = {
       cwd: process.cwd(),
@@ -704,13 +753,47 @@ export class LoopEngine {
 
   async run(goal: string): Promise<string> {
     this.messages.push({ role: "user", content: goal });
-    // Dispatch by the resolved model profile — Engine v3's core move. Strong
-    // native tool callers get the free loop; weaker models get grammar-forced
-    // JSON dispatch, degrading toward more structure as the model shrinks.
+    const result = await this.dispatch(goal);
+    // Router fallback: a stuck small/mid loop gets one escalated retry.
+    if (this.shouldEscalate(result)) return this.escalate(goal);
+    return result;
+  }
+
+  /** Dispatch by the resolved model profile — Engine v3's core move. Strong
+   * native tool callers get the free loop; weaker models get grammar-forced
+   * JSON dispatch, degrading toward more structure as the model shrinks. */
+  private dispatch(goal: string): Promise<string> {
     if (this.profile.toolCalling === "native") return this.runFree(goal);
     if (this.profile.loop === "pipeline") return this.runPipeline(goal);
     if (this.profile.loop === "plan-act") return this.runPlanAct(goal);
     return this.runDecisionLoop(goal);
+  }
+
+  /** A result signals a stuck loop when it was safety-stopped, errored, or came
+   * back empty. Only low tiers escalate, and only once. A confidently-wrong
+   * answer is NOT detectable here — that needs a verify pass, not a retry. */
+  private shouldEscalate(result: string): boolean {
+    if (this.escalated) return false;
+    if (this.profile.tier !== "small" && this.profile.tier !== "mid") return false;
+    const r = result.trim();
+    return r.length === 0 || /^Stopped:|^Error:/.test(r);
+  }
+
+  /** Retry the goal once with more structure (plan-act) and, if configured, a
+   * stronger model. Resets transcript to the bare goal and clears the failure
+   * count so the retry starts clean. */
+  private async escalate(goal: string): Promise<string> {
+    this.escalated = true;
+    if (this.fallbackModel && this.fallbackModel !== this.config.model) {
+      this.onEvent?.({ type: "status", content: \`escalating to \${this.fallbackModel}\` });
+      this.config = { ...this.config, model: this.fallbackModel };
+    } else {
+      this.onEvent?.({ type: "status", content: "escalating: retrying with explicit planning" });
+    }
+    this.safety.reset();
+    this.nudged = false;
+    this.messages = [{ role: "user", content: goal }];
+    return this.runPlanAct(goal);
   }
 
   /** Compact the transcript when it nears the context window. */
@@ -840,6 +923,23 @@ export class LoopEngine {
     ].filter(Boolean).join("\\n\\n");
   }
 
+  /** Small/mid models often emit a correct-but-ugly JSON-ish final answer. One
+   * unconstrained call restates it as plain prose using only facts already in
+   * the transcript. Fails safe: any error returns the rough draft unchanged. */
+  private async finalizeAnswer(goal: string, rough: string): Promise<string> {
+    const sys = "Restate the final answer to the user's goal in 1-3 plain English sentences, using only facts already established in this conversation. No JSON, no code fences, no preamble.";
+    const msgs = [{ role: "system", content: sys }, ...this.messages, { role: "user", content: \`Goal: \${goal}\\n\\nDraft answer: \${rough}\\n\\nRewrite it as plain prose.\` }];
+    let out = "";
+    try {
+      for await (const e of streamProvider(this.config, msgs, undefined, { temperature: this.profile.temperature })) {
+        if (e.type === "text") out += e.content ?? "";
+        if (e.type === "error") return rough;
+      }
+    } catch { return rough; }
+    const clean = out.trim();
+    return clean.length >= 2 ? clean : rough;
+  }
+
   /** Mid/small: grammar-forced JSON dispatch, one tool per turn. Narration is
    * physically impossible under the decision schema — the #1 small-model failure. */
   private async runDecisionLoop(goal: string, stageInstruction?: string): Promise<string> {
@@ -853,6 +953,7 @@ export class LoopEngine {
     const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty };
     let toolsUsed = 0;
     let actNudged = false;
+    let verifyChecked = false;
 
     while (true) {
       iteration++;
@@ -880,7 +981,7 @@ export class LoopEngine {
           continue;
         }
         if (this.persistSession) await saveSession(this.messages);
-        return raw.trim();
+        return unwrapFinal(raw.trim());
       }
       this.nudged = false;
 
@@ -895,7 +996,33 @@ export class LoopEngine {
           this.messages.push({ role: "user", content: "You have not used any tool yet. Do not answer from memory — call the appropriate tool to inspect or change the real files first, then finish." });
           continue;
         }
-        const answer = decision.answer ?? "";
+        // Verify pass: a negative claim from a small/mid model is grounded against
+        // the real filesystem before it's trusted. Small models hallucinate a
+        // path prefix (e.g. src/) then "confirm" absence — so the HARNESS lists
+        // the actual cwd and hands over the true filenames, rather than letting
+        // the model pick where to look again. Deterministic; a genuine absence
+        // survives (the file simply isn't in the list). Fires once.
+        if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
+            !verifyChecked && this.tools.length > 0 &&
+            NEGATIVE_CLAIM.test(unwrapFinal(decision.answer ?? ""))) {
+          verifyChecked = true;
+          this.onEvent?.({ type: "status", content: "verifying claim against the filesystem" });
+          let listing = "";
+          try {
+            const entries = (await import("node:fs")).readdirSync(process.cwd());
+            listing = entries.slice(0, 60).join(", ") + (entries.length > 60 ? ", …" : "");
+          } catch { /* fs unavailable — fall back to a plain re-check nudge */ }
+          this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+          this.messages.push({ role: "user", content: listing
+            ? \`The working directory actually contains these files: \${listing}. Do NOT assume a subdirectory like src/ — read paths relative to the current directory. If the item you called missing is in that list, read it and correct your answer; only conclude absence if it is truly not listed.\`
+            : "Before finalizing: verify with a tool, reading paths relative to the current directory (do not assume a src/ prefix). Correct your answer if the item actually exists." });
+          continue;
+        }
+        let answer = unwrapFinal(decision.answer ?? "");
+        if ((this.profile.tier === "small" || this.profile.tier === "mid") && looksNonProse(answer)) {
+          this.onEvent?.({ type: "status", content: "restating answer" });
+          answer = await this.finalizeAnswer(goal, answer);
+        }
         this.messages.push({ role: "assistant", content: answer });
         if (this.persistSession) await saveSession(this.messages);
         return answer;

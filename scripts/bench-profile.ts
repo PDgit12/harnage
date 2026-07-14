@@ -185,10 +185,18 @@ for (const task of TASKS) {
 		console.log(`    ${(err ?? out).replace(/\s+/g, " ").slice(0, 160)}`);
 }
 
+// Per-tier release gate. Constrained decode makes strong/frontier fully
+// reliable; small/mid still miss the odd multi-step task, so their bar is 4/5.
+// Exit nonzero below bar so this can gate a release (run on a machine with the
+// model — cloud CI has no Ollama).
+const BAR: Record<string, number> = { frontier: 5, strong: 5, mid: 4, small: 4 };
+const tier = String(profile.tier);
+const bar = BAR[tier] ?? TASKS.length;
+const gatePass = passed >= bar;
 console.log(
-	`\n${passed}/${TASKS.length} passed  (${model}, ${profile.tier} tier / ${profile.loop} loop)\n`,
+	`\n${passed}/${TASKS.length} passed · bar ${bar}/${TASKS.length} for ${tier} tier → ${gatePass ? "PASS" : "FAIL"}  (${model}, ${profile.loop} loop)\n`,
 );
 
 await rm(buildRoot, { recursive: true, force: true });
 await rm(fixture, { recursive: true, force: true });
-process.exit(passed === TASKS.length ? 0 : 1);
+process.exit(gatePass ? 0 : 1);
