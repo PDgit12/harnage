@@ -21,9 +21,11 @@ import {
 } from "./harness-templates";
 import {
 	COMMANDS_REGISTRY,
+	DEPLOY_MD_TEMPLATE,
 	MAIN_ENTRY_TEMPLATE,
 	PACKAGE_JSON_TEMPLATE,
 	PROVIDER_SERVICE,
+	SECURITY_MD_TEMPLATE,
 	TOOL_TYPESCRIPT,
 	TOOLS_REGISTRY,
 	TSCONFIG_TEMPLATE,
@@ -90,6 +92,10 @@ export async function assembleAndVerify(
 		JSON.stringify(TSCONFIG_TEMPLATE, null, 2),
 	);
 	await writeFile(join(outputDir, "vitest.config.ts"), VITEST_CONFIG);
+
+	// Deliverable docs the customer's security team reads before a deployment.
+	await writeFile(join(outputDir, "DEPLOY.md"), DEPLOY_MD_TEMPLATE(plan));
+	await writeFile(join(outputDir, "SECURITY.md"), SECURITY_MD_TEMPLATE(plan));
 
 	// Harness subsystems: engine + compaction, permissions, skills, session, sub-agents
 	await writeFile(join(srcDir, "profiles.ts"), HARNESS_PROFILES);

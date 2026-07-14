@@ -11,7 +11,9 @@ export const PACKAGE_JSON_TEMPLATE = (plan: HarnessPlan) => ({
 	scripts: {
 		start: "bun src/main.tsx",
 		dev: "bun --watch src/main.tsx",
-		build: "bun build src/main.tsx --compile",
+		// Offline deployment: one self-contained binary (bun runtime + all deps
+		// bundled), runs on an air-gapped box with no node_modules. See DEPLOY.md.
+		build: `bun build src/main.tsx --compile --outfile ${plan.name}`,
 		typecheck: "tsc --noEmit",
 		test: "vitest run",
 		lint: "echo 'No linter configured yet'",
@@ -26,6 +28,9 @@ export const PACKAGE_JSON_TEMPLATE = (plan: HarnessPlan) => ({
 		react: "^18.3.1",
 		ink: "^5.2.1",
 		"ink-text-input": "^6.0.0",
+		// ink statically imports this; without it `bun build --compile` can't
+		// resolve it and the offline binary fails to build.
+		"react-devtools-core": "^6.1.1",
 		...(plan.providers.includes("anthropic")
 			? { "@anthropic-ai/sdk": "^0.110.0" }
 			: {}),
@@ -461,4 +466,107 @@ export function trackUsage(tokensIn: number, tokensOut: number): void {
   costTracker.requestCount += 1;
   costTracker.costUsd += (tokensIn * 3 + tokensOut * 15) / 1_000_000;
 }
+`;
+
+export const DEPLOY_MD_TEMPLATE = (
+	plan: HarnessPlan,
+) => `# Deploying ${plan.name} — air-gapped / on-premises
+
+This harness runs entirely on your own hardware. Nothing leaves the machine.
+See SECURITY.md for the security posture; this is the install path.
+
+## Option A — self-contained binary (recommended for air-gap)
+
+On a machine WITH network (build once):
+
+\`\`\`bash
+bun install
+bun run build          # → ./${plan.name}  (bun runtime + all deps bundled)
+sha256sum ${plan.name} # record the checksum for your security team
+\`\`\`
+
+Ship the single \`${plan.name}\` binary to the air-gapped box. It needs **no
+node_modules, no bun, no network** to run:
+
+\`\`\`bash
+./${plan.name}            # TUI
+./${plan.name} --classic  # plain REPL
+\`\`\`
+
+## Option B — run from source (dev / connected)
+
+\`\`\`bash
+bun install
+bun start
+\`\`\`
+
+## The model (also local)
+
+This harness talks to a model you host. For a sovereign deployment that is a
+local Ollama instance:
+
+\`\`\`bash
+ollama serve                 # http://localhost:11434
+ollama pull qwen2.5:3b       # or your approved model, on a connected machine…
+\`\`\`
+
+For a fully air-gapped box: pull the model on a connected machine, copy the
+Ollama model blobs (\`~/.ollama/models\`) across, or serve from your internal
+registry. The harness makes no outbound call other than to this local endpoint —
+verify with the egress check in the project it was generated from.
+
+## Verify the deployment
+
+\`\`\`bash
+./${plan.name} --classic     # starts with no network → prints its scaffold tier
+# after a run, inspect the local audit trail:
+cat ~/.${plan.name}/audit.jsonl
+# and the permission policy your security team pins:
+cat ~/.${plan.name}/permissions.json
+\`\`\`
+
+## Optional hardening
+
+- \`AGENTFORGE_SANDBOX=docker\` — run every shell command in \`docker run --rm
+  --network none\`, working dir mounted, no network.
+- \`AGENTFORGE_AUDIT=off\` — disable the audit trail (on by default).
+`;
+
+export const SECURITY_MD_TEMPLATE = (
+	plan: HarnessPlan,
+) => `# Security posture — ${plan.name}
+
+Written for a security reviewer evaluating an on-premises deployment.
+
+## Data flow
+- The harness runs a model through a provider you configure. For a sovereign
+  deployment that is a local Ollama endpoint (\`http://localhost:11434\`) — the
+  loop's only network call is to that local address.
+- Prompts, source, tool output, and model responses **stay on the machine**.
+  Nothing is sent to a third party in the local configuration.
+- Hosted providers exist in code but are **dormant unless you configure one**.
+
+## No phone-home
+There is no telemetry, usage tracking, or crash reporting. The only outbound
+endpoint is the model provider you set. (The generator ships an \`egress\` check
+that scans generated code for unexpected hosts.)
+
+## Audit trail
+Every run appends to \`~/.${plan.name}/audit.jsonl\` (JSONL, local, never
+transmitted): run boundaries, every tool execution and its target, and
+denied/rejected tool calls. On by default; \`AGENTFORGE_AUDIT=off\` to disable.
+
+## Permission model — deny-first, policy-as-file
+Tool calls are checked before execution; a tool with no matching allow rule is
+blocked, not run. The policy is a plain inspectable file at
+\`~/.${plan.name}/permissions.json\` your security team can pin to an allow-list.
+
+## Shell isolation (opt-in)
+\`AGENTFORGE_SANDBOX=docker\` runs every shell command in
+\`docker run --rm --network none\` against a pinned image, working directory
+mounted, no network. Commands pass as argv, never interpolated into a host shell.
+
+## What you own
+The entire harness is generated TypeScript source — no compiled blobs, no runtime
+dependency on the generator. Read it, fork it, pin it, review it. Not a black box.
 `;
