@@ -58,7 +58,7 @@ export function resolveProfile(model: string, contextTokens = 8192): ModelProfil
   // Small models (<=3.5B or known small families): fixed pipeline, minimal
   // tools, grammar-forced JSON so narration is physically impossible.
   if ((size > 0 && size <= 3.5) || /phi|tinyllama|gemma:2b|llama3\\.2/.test(m)) {
-    return { tier: "small", loop: "pipeline", toolCalling: "constrained-json", maxTools: 3,
+    return { tier: "small", loop: "pipeline", toolCalling: "constrained-json", maxTools: 4,
       editFormat: "whole-file", systemPromptBudget: 1600, temperature: 0, repeatPenalty: 1.15, nudge: false, contextTokens };
   }
 
@@ -432,7 +432,9 @@ export function toToolDefs(tools: Tool[]): Array<Record<string, unknown>> {
   }));
 }
 
-const CORE_TOOLS = ["file_read", "bash", "glob", "grep"];
+// Always-keep tools; glob/grep/file_write compete by goal relevance so a tight
+// small-model budget still leaves room for the tool the task actually needs.
+const CORE_TOOLS = ["file_read", "bash"];
 
 /** Cap the exposed tool set to the profile budget (ACI principle): keep the
  * core tools plus the ones most relevant to the goal. Small models' tool-call
@@ -799,14 +801,7 @@ export class LoopEngine {
             output = \`Permission denied: \${permission.reason}\`;
             this.safety.recordFailure();
           } else {
-            try {
-              const r = await tool.call(call.input, this.toolContext);
-              output = r.error ? r.error : r.content ?? JSON.stringify(r.data ?? "");
-              this.safety.recordSuccess();
-            } catch (err) {
-              output = String(err);
-              this.safety.recordFailure();
-            }
+            output = await this.callToolChecked(tool, call.input);
           }
         }
         this.messages.push({ role: "tool", content: compactToolOutput(output), tool_call_id: call.id });
@@ -839,7 +834,11 @@ export class LoopEngine {
   private async runDecisionLoop(goal: string, stageInstruction?: string): Promise<string> {
     let iteration = 0;
     const selected = selectTools(this.tools, goal, this.profile.maxTools);
-    const toolList = selected.map(t => \`- \${t.name}: \${t.description}\`).join("\\n");
+    const toolList = selected.map(t => {
+      const schema = t.inputSchema.toJSONSchema?.() as { properties?: Record<string, unknown> } | undefined;
+      const params = schema?.properties ? Object.keys(schema.properties).join(", ") : "";
+      return \`- \${t.name}(\${params}): \${t.description}\`;
+    }).join("\\n");
     const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty };
 
     while (true) {
@@ -895,14 +894,7 @@ export class LoopEngine {
           output = \`Permission denied: \${permission.reason}\`;
           this.safety.recordFailure();
         } else {
-          try {
-            const r = await tool.call(args, this.toolContext);
-            output = r.error ? r.error : r.content ?? JSON.stringify(r.data ?? "");
-            this.safety.recordSuccess();
-          } catch (err) {
-            output = String(err);
-            this.safety.recordFailure();
-          }
+          output = await this.callToolChecked(tool, args);
         }
       }
       this.messages.push({ role: "user", content: \`Observation from \${name}:\\n\${compactToolOutput(output)}\` });
@@ -984,6 +976,30 @@ export class LoopEngine {
       savePolicy(this.policy);
     }
     return { ok: true };
+  }
+
+  /** Validate args against the tool's schema, then run it. On a schema mismatch
+   * (a small model's #2 failure — right tool, wrong arg keys) return a corrective
+   * message naming the expected keys so the model self-fixes next turn, instead
+   * of a dead exception. Validation misses are recoverable — they don't count
+   * toward the consecutive-failure stop; real exceptions do. */
+  private async callToolChecked(tool: Tool, args: Record<string, unknown>): Promise<string> {
+    const parsed = tool.inputSchema.safeParse(args);
+    if (!parsed.success) {
+      const schema = tool.inputSchema.toJSONSchema?.() as { properties?: Record<string, { type?: string }> } | undefined;
+      const sig = schema?.properties
+        ? Object.entries(schema.properties).map(([k, v]) => k + ":" + (v?.type ?? "any")).join(", ")
+        : "";
+      return "Invalid arguments for " + tool.name + ". Expected { " + sig + " }, but you sent " + JSON.stringify(args) + ". Retry with those exact keys.";
+    }
+    try {
+      const r = await tool.call(parsed.data as Record<string, unknown>, this.toolContext);
+      this.safety.recordSuccess();
+      return r.error ? r.error : r.content ?? JSON.stringify(r.data ?? "");
+    } catch (err) {
+      this.safety.recordFailure();
+      return String(err);
+    }
   }
 
   private async loadSystemPrompt(): Promise<string> {

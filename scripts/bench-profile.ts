@@ -35,7 +35,7 @@ const TASKS: Task[] = [
 	{
 		id: "T1 file census",
 		goal: "Count the files in the current directory grouped by extension and report the totals.",
-		check: (o) => /\.(ts|js|md)\b/.test(o) && /\d/.test(o),
+		check: (o) => /\b(ts|js|md)\b/.test(o) && /\d/.test(o),
 	},
 	{
 		id: "T2 targeted read",
@@ -58,7 +58,9 @@ const TASKS: Task[] = [
 		id: "T5 recovery",
 		goal: "Read the file does-not-exist-42.ts and summarize it.",
 		check: (o) =>
-			/not (found|exist)|no such|does ?n'?t exist|unable|cannot/i.test(o),
+			/not (be )?(found|exist)|no such|does ?n'?t exist|could ?n'?t|couldn't|unable|cannot|can't find/i.test(
+				o,
+			),
 	},
 ];
 

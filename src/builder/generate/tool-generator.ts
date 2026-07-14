@@ -36,7 +36,7 @@ async function runSandboxed(command: string, cwd: string, timeoutMs: number) {
 }
 
 export const BashTool = {
-  name: "Bash",
+  name: "bash",
   description: "Execute shell commands and return output",
   inputSchema,
   isReadOnly: (input: { command: string }) => {
@@ -65,7 +65,7 @@ const inputSchema = z.object({
 });
 
 export const FileReadTool = {
-  name: "FileRead",
+  name: "file_read",
   description: "Read the contents of a file",
   inputSchema,
   isReadOnly: () => true,
@@ -88,7 +88,7 @@ const inputSchema = z.object({
 });
 
 export const FileEditTool = {
-  name: "FileEdit",
+  name: "file_edit",
   description: "Edit a file with string replacement",
   inputSchema,
   isReadOnly: () => false,
@@ -113,7 +113,7 @@ const inputSchema = z.object({
 });
 
 export const FileWriteTool = {
-  name: "FileWrite",
+  name: "file_write",
   description: "Write content to a file (creates parent directories)",
   inputSchema,
   isReadOnly: () => false,
@@ -134,7 +134,7 @@ const inputSchema = z.object({
 });
 
 export const GlobTool = {
-  name: "Glob",
+  name: "glob",
   description: "Find files matching a glob pattern",
   inputSchema,
   isReadOnly: () => true,
@@ -165,7 +165,7 @@ const inputSchema = z.object({
 });
 
 export const GrepTool = {
-  name: "Grep",
+  name: "grep",
   description: "Search file contents with regex",
   inputSchema,
   isReadOnly: () => true,
@@ -188,7 +188,7 @@ const inputSchema = z.object({
 });
 
 export const WebFetchTool = {
-  name: "WebFetch",
+  name: "web_fetch",
   description: "Fetch and render a web page",
   inputSchema,
   isReadOnly: () => true,
@@ -211,7 +211,7 @@ const inputSchema = z.object({
 });
 
 export const WebSearchTool = {
-  name: "WebSearch",
+  name: "web_search",
   description: "Search the web for information",
   inputSchema,
   isReadOnly: () => true,
@@ -241,7 +241,7 @@ const inputSchema = z.object({
 });
 
 export const TestRunnerTool = {
-  name: "TestRunner",
+  name: "test_runner",
   description: "Run tests and collect results",
   inputSchema,
   isReadOnly: () => true,
@@ -277,7 +277,7 @@ const inputSchema = z.object({
 });
 
 export const DockerTool = {
-  name: "Docker",
+  name: "docker",
   description: "Execute Docker commands",
   inputSchema,
   isReadOnly: (input: { command: string }) => ["ps", "images", "info", "version"].includes(input.command),
@@ -302,7 +302,7 @@ const inputSchema = z.object({
 });
 
 export const MCPTool = {
-  name: "MCP",
+  name: "mcp",
   description: "Manage MCP server connections",
   inputSchema,
   isReadOnly: () => true,
