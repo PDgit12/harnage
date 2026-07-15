@@ -2,7 +2,7 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalCommandHandler } from "../commands";
-import { findCommand } from "../commands";
+import { COMMANDS, findCommand } from "../commands";
 import { conversation } from "../conv";
 import { costTracker } from "../cost-tracker";
 import type { LoopEngine } from "../loop/LoopEngine";
@@ -186,6 +186,13 @@ export function App({ config, engine, branch, resumeState }: AppProps) {
 		[handleCommand, runGoal],
 	);
 
+	// Live slash-command menu: surface + highlight matching commands as you type "/".
+	const slashQuery = input.trim().split(" ")[0];
+	const slashMatches =
+		input.startsWith("/") && !busy
+			? COMMANDS.filter((c) => c.name.startsWith(slashQuery)).slice(0, 7)
+			: [];
+
 	return (
 		<Box flexDirection="column">
 			<Static items={history}>
@@ -234,13 +241,24 @@ export function App({ config, engine, branch, resumeState }: AppProps) {
 				</Box>
 			)}
 
+			{slashMatches.length > 0 && (
+				<Box flexDirection="column" paddingLeft={2}>
+					{slashMatches.map((c) => (
+						<Text key={c.name}>
+							<Text color="cyan">{c.name}</Text>
+							<Text dimColor>{`  ${c.description}`}</Text>
+						</Text>
+					))}
+				</Box>
+			)}
+
 			<Box borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
-				<Text color="cyan">{"❯ "}</Text>
+				<Text color={input.startsWith("/") ? "magenta" : "cyan"}>{"❯ "}</Text>
 				<TextInput
 					value={input}
 					onChange={setInput}
 					onSubmit={onSubmit}
-					placeholder={busy ? "working…" : "type a goal or /command"}
+					placeholder={busy ? "working…" : "type a goal or / for commands"}
 				/>
 			</Box>
 
