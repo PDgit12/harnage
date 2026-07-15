@@ -297,19 +297,38 @@ program
 		}
 	});
 
+// Conversational, iterative builder (Lovable/Emergent-style): describe → build
+// live → refine → rebuild → run. Uses whatever model API is configured as the
+// build brain; offline chassis when none.
+program
+	.command("studio")
+	.description(
+		"Conversational harness builder — describe, refine, watch it evolve",
+	)
+	.action(async () => {
+		const { studio } = await import("./studio");
+		await studio();
+	});
+
 // The BUILDER, separate from the reference-harness REPL. Generating a harness
 // needs no model (the deterministic chassis builds offline); a model only makes
 // the plan smarter. So `harnage init` never connects to one unless you ask.
 program
-	.command("init <description...>")
+	.command("init [description...]")
 	.description("Generate a new harness from a description (no model required)")
 	.option(
 		"--model <id>",
 		"optionally use a local Ollama model to plan the harness",
 	)
 	.option("--out <dir>", "output directory (default: current directory)")
-	.action(async (descriptionParts: string[], opts) => {
+	.action(async (descriptionParts: string[] = [], opts) => {
 		const description = descriptionParts.join(" ").trim();
+		// No description → drop into the conversational studio.
+		if (!description) {
+			const { studio } = await import("./studio");
+			await studio();
+			return;
+		}
 		const { buildHarness } = await import("./builder");
 		let options: Parameters<typeof buildHarness>[3];
 		if (opts.model) {

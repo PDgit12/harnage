@@ -38,6 +38,16 @@ export async function resolveProvider(): Promise<ProviderConfig> {
 			apiKey: process.env.OPENAI_API_KEY,
 			maxTokens: 8192,
 		};
+	// OpenRouter — one key, many model APIs (Anthropic/OpenAI/Google/poolside/…).
+	// Set OPENROUTER_MODEL to pick (e.g. poolside/laguna-m.1:free).
+	if (process.env.OPENROUTER_API_KEY)
+		return {
+			type: "openrouter",
+			model: process.env.OPENROUTER_MODEL ?? "anthropic/claude-3.5-sonnet",
+			apiKey: process.env.OPENROUTER_API_KEY,
+			baseUrl: "https://openrouter.ai/api/v1",
+			maxTokens: 8192,
+		};
 
 	const { checkOllamaRunning, detectOllamaConfig } = await import(
 		"../ollama/discovery"
