@@ -297,6 +297,63 @@ program
 		}
 	});
 
+// The BUILDER, separate from the reference-harness REPL. Generating a harness
+// needs no model (the deterministic chassis builds offline); a model only makes
+// the plan smarter. So `harnage init` never connects to one unless you ask.
+program
+	.command("init <description...>")
+	.description("Generate a new harness from a description (no model required)")
+	.option(
+		"--model <id>",
+		"optionally use a local Ollama model to plan the harness",
+	)
+	.option("--out <dir>", "output directory (default: current directory)")
+	.action(async (descriptionParts: string[], opts) => {
+		const description = descriptionParts.join(" ").trim();
+		const { buildHarness } = await import("./builder");
+		let options: Parameters<typeof buildHarness>[3];
+		if (opts.model) {
+			const { createProvider } = await import("./services/api/client");
+			options = {
+				provider: createProvider({
+					type: "ollama",
+					model: opts.model,
+					baseUrl: "http://localhost:11434",
+					maxTokens: 8192,
+					contextTokens: 8192,
+				}),
+				ask: async (_q: string, d: string) => d, // non-interactive: take defaults
+			};
+		}
+		console.log(
+			chalk.dim(
+				`Building "${description}"${opts.model ? ` — planning with ${opts.model}` : " — offline"}…`,
+			),
+		);
+		const result = await buildHarness(
+			description,
+			opts.out,
+			(p) => {
+				process.stdout.write(
+					`\r  ${chalk.dim(p.stage.padEnd(10))} ${chalk.dim(p.message)}\x1b[K`,
+				);
+			},
+			options,
+		);
+		process.stdout.write("\r\x1b[K");
+		if (result.success) {
+			console.log(chalk.green.bold("✓ Harness built"));
+			console.log(`  ${chalk.bold("Output:")} ${result.outputDir}`);
+			console.log(
+				chalk.dim(`  cd ${result.outputDir} && bun install && bun start`),
+			);
+		} else {
+			console.log(chalk.red.bold("✗ Build failed"));
+			for (const e of result.errors) console.log(chalk.red(`  - ${e}`));
+			process.exit(1);
+		}
+	});
+
 process.on("unhandledRejection", (reason) => {
 	console.error(
 		"Unhandled rejection:",
