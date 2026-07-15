@@ -112,6 +112,67 @@ export const PlanSchema = z.object({
 });
 export type LLMPlan = z.infer<typeof PlanSchema>;
 
+// Split-plan schemas: weak local build brains fail at one wide JSON object but
+// succeed at narrow ones (harnage's own thesis — constrain the task). runLLMPlan
+// makes a small CORE call, then optional best-effort enrichment calls; each
+// enrichment can fail without losing the whole bespoke plan.
+export const CorePlanSchema = z.object({
+	name: z
+		.string()
+		.regex(/^[a-z0-9-]+$/)
+		.max(30),
+	description: z.string().max(80),
+	tools: z.array(z.string()).min(1),
+	commands: z.array(z.string()),
+	systemPrompt: z.string().min(50),
+	hasMcp: z.boolean(),
+	config: z
+		.object({
+			maxIterations: z.number().int().min(1).max(100).optional(),
+			memory: z.boolean().optional(),
+			eval: z.boolean().optional(),
+			judgeByDefault: z.boolean().optional(),
+		})
+		.optional(),
+});
+export type CorePlan = z.infer<typeof CorePlanSchema>;
+
+export const CommandsPlanSchema = z.object({
+	commands: z
+		.array(
+			z.object({
+				name: z.string(),
+				description: z.string(),
+				behavior: z.string(),
+			}),
+		)
+		.max(6),
+});
+
+export const SkillsPlanSchema = z.object({
+	skills: z
+		.array(
+			z.object({
+				name: z.string(),
+				trigger: z.string(),
+				guidance: z.string(),
+			}),
+		)
+		.max(6),
+});
+
+export const PipelinePlanSchema = z.object({
+	pipeline: z
+		.array(
+			z.object({
+				name: z.string(),
+				instruction: z.string(),
+				tool: z.string().optional(),
+			}),
+		)
+		.max(6),
+});
+
 // `analysis` first on purpose: JSON key order steers generation, and a short
 // diagnosis before patching measurably improves small-model patch quality.
 export const RepairPatchSchema = z.object({

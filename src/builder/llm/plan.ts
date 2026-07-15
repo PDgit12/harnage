@@ -7,7 +7,13 @@ import type { HarnessPlan } from "../index";
 import type { ProjectContext } from "../spec/context";
 import { completeJSON } from "./client";
 import { KNOWN_TOOLS } from "./interview";
-import { type LLMSpec, PlanSchema } from "./schemas";
+import {
+	CommandsPlanSchema,
+	CorePlanSchema,
+	type LLMSpec,
+	PipelinePlanSchema,
+	SkillsPlanSchema,
+} from "./schemas";
 
 const ALWAYS_TOOLS = [
 	"bash",
@@ -18,131 +24,155 @@ const ALWAYS_TOOLS = [
 	"file_write",
 ];
 
-const PLAN_EXAMPLE = `{
+const CORE_EXAMPLE = `{
   "name": "code-review-agent",
   "description": "Reviews TypeScript pull requests",
   "tools": ["bash", "file_read", "grep", "glob"],
-  "commands": ["help", "clear", "exit", "model", "review"],
-  "providers": ["ollama"],
-  "systemPrompt": "You are a code review agent. Your goal is to review TypeScript pull requests for bugs, style issues, and security problems. Use your tools to read files, search code, and run checks. Always verify claims by running commands. Report findings concisely with file:line references.",
+  "commands": ["help", "clear", "review"],
+  "systemPrompt": "You are a code review agent. Review TypeScript pull requests for bugs, style, and security. Use your tools to read files, search code, and run checks. Verify claims by running commands. Report findings concisely with file:line references.",
   "hasMcp": false,
-  "pipeline": [
-    { "name": "locate", "instruction": "List the changed TypeScript files", "tool": "glob" },
-    { "name": "read", "instruction": "Read each changed file", "tool": "file_read" },
-    { "name": "check", "instruction": "Run the type checker and tests", "tool": "bash" },
-    { "name": "report", "instruction": "Summarize findings with file:line references" }
-  ]
+  "config": { "maxIterations": 20, "memory": true, "eval": true, "judgeByDefault": false }
 }`;
 
 /**
- * PLAN stage: LLM turns a validated spec into a HarnessPlan. Model output is
- * post-processed deterministically — never trust the model for invariants.
+ * PLAN stage. Split into a small CORE call every build brain can handle, then
+ * optional best-effort enrichment calls (pipeline, custom commands, custom
+ * skills). A weak local model fails at one wide JSON object but nails narrow
+ * ones, and any enrichment can fail without losing the core bespoke plan.
+ * Model output is post-processed deterministically — never trust it for
+ * invariants.
  */
 export async function runLLMPlan(
 	provider: Provider,
 	spec: LLMSpec,
 	_projectContext?: ProjectContext,
 ): Promise<HarnessPlan> {
-	const prompt = `You are the planner for harnage. Given this validated spec, produce a harness plan.
+	const corePrompt = `You are the planner for harnage. Given this validated spec, produce the CORE harness plan.
 Spec:
 ${JSON.stringify(spec, null, 2)}
 Constraints:
 - tools must be chosen from: ${KNOWN_TOOLS.join(", ")}
 - name: lowercase kebab-case, max 30 chars
-- systemPrompt: write the COMPLETE system prompt the generated agent will run with — identity, goal, tool usage rules, safety rules, output style. Ground it in the purpose${spec.domainKnowledge ? " and domainKnowledge" : ""}, name the agent's domain concretely, and reference its actual tools${spec.customTools?.length ? " (including the custom ones: " + spec.customTools.map((t) => t.name).join(", ") + ")" : ""} and workflows by name so the identity is specific to THIS agent, not generic.
-- pipeline: 3-6 ordered stages a SMALL local model can execute to accomplish this harness's core domain task (e.g. glob files -> count by extension -> read key files -> report). Each stage: name, a one-line instruction, and optionally a single tool from the tools list. This lets a 3B model beat a naive large-model loop on this niche.
-- customCommands: bespoke slash commands specific to THIS agent's domain (name, description, behavior in prose). Only real, useful ones — the base commands (/help /clear /model /cost /config /doctor) are always present, do NOT repeat them.
-- customSkills: domain procedural recipes (name, trigger phrase, guidance prose) teaching the agent how to do this harness's core workflows.
+- systemPrompt: write the COMPLETE system prompt the generated agent will run with — identity, goal, tool-usage rules, safety rules, output style. Ground it in the purpose${spec.domainKnowledge ? " and domainKnowledge" : ""}, name the domain concretely, and reference the actual tools by name so the identity is specific to THIS agent.
+- config: pick sane per-domain chassis knobs (maxIterations 1-100, memory/eval booleans, judgeByDefault).
 Example output:
-${PLAN_EXAMPLE}
+${CORE_EXAMPLE}
 Respond with ONLY a JSON object in that shape.`;
 
-	const raw = await completeJSON(provider, prompt, PlanSchema);
+	const core = await completeJSON(provider, corePrompt, CorePlanSchema);
 
 	// Deterministic post-processing: enforce invariants the model can't be
 	// trusted with.
 	const known = new Set(KNOWN_TOOLS);
 	const tools = [
-		...new Set([...ALWAYS_TOOLS, ...raw.tools.filter((t) => known.has(t))]),
+		...new Set([...ALWAYS_TOOLS, ...core.tools.filter((t) => known.has(t))]),
 	];
-
 	const name =
-		raw.name
+		core.name
 			.toLowerCase()
 			.replace(/\s+/g, "-")
 			.replace(/[^a-z0-9-]/g, "")
 			.slice(0, 30) || "agent-harness";
-
 	const commands = [
 		...new Set(
-			raw.commands.map((c) => c.replace(/^\//, "").replace(/-/g, "_")),
+			core.commands.map((c) => c.replace(/^\//, "").replace(/-/g, "_")),
 		),
 	];
-
-	const providers = [...new Set([...raw.providers, ...spec.models])];
-
+	const providers = [...new Set(spec.models)];
 	const systemPrompt =
-		raw.systemPrompt.trim().length >= 50
-			? raw.systemPrompt
+		core.systemPrompt.trim().length >= 50
+			? core.systemPrompt
 			: buildSystemPrompt(DEFAULT_BLOCKS, {
 					name,
 					description: spec.purpose,
 					tools,
 					commands,
 				});
+	const config = {
+		maxIterations: clampInt(core.config?.maxIterations, 1, 100, 20),
+		memory: core.config?.memory ?? true,
+		eval: core.config?.eval ?? true,
+		judgeByDefault: core.config?.judgeByDefault ?? false,
+	};
 
-	// Pipeline stages steer the small-model tier; a stage tool must be one the
-	// harness actually ships, else drop the reference (stage still runs toolless).
-	const toolSet = new Set(tools);
-	const pipeline = raw.pipeline?.slice(0, 6).map((s) => ({
-		name: s.name,
-		instruction: s.instruction,
-		tool: s.tool && toolSet.has(s.tool) ? s.tool : undefined,
-	}));
-
-	// Bespoke commands + skills: carry the LLM's plan through to generation.
-	// Names are sanitized to the same id shape the generators use.
-	const cmdId = (n: string) =>
-		n
-			.toLowerCase()
-			.replace(/^\//, "")
-			.replace(/[^a-z0-9]+/g, "_")
-			.replace(/^_+|_+$/g, "")
-			.slice(0, 30);
-	const baseCmds = new Set([
-		"help",
-		"clear",
-		"model",
-		"cost",
-		"config",
-		"doctor",
-		"exit",
-	]);
-	const customCommands = (raw.customCommands ?? [])
-		.map((c) => ({ ...c, name: cmdId(c.name) }))
-		.filter((c) => c.name && !baseCmds.has(c.name));
-	const customSkills = (raw.customSkills ?? spec.customSkills ?? []).filter(
-		(s) => s.name && s.guidance,
-	);
-
-	return {
+	const plan: HarnessPlan = {
 		name,
-		description: raw.description.slice(0, 80),
+		description: core.description.slice(0, 80),
 		tools,
 		commands,
 		providers,
 		systemPrompt,
-		hasMcp: raw.hasMcp || tools.includes("mcp"),
-		...(pipeline?.length ? { pipeline } : {}),
-		...(customCommands.length ? { customCommands } : {}),
-		...(customSkills.length ? { customSkills } : {}),
-		config: {
-			maxIterations: clampInt(raw.config?.maxIterations, 1, 100, 20),
-			memory: raw.config?.memory ?? true,
-			eval: raw.config?.eval ?? true,
-			judgeByDefault: raw.config?.judgeByDefault ?? false,
-		},
+		hasMcp: core.hasMcp || tools.includes("mcp"),
+		config,
 	};
+
+	// --- Optional enrichment calls (best-effort; a failure just skips it) ---
+
+	// Pipeline: ordered stages a SMALL local model can execute for the core task.
+	try {
+		const toolSet = new Set(tools);
+		const { pipeline } = await completeJSON(
+			provider,
+			`For the harness "${plan.description}", output 3-6 ordered stages a small local model executes to accomplish its core task (e.g. glob files -> read -> check -> report). Each stage: name, one-line instruction, optionally one tool from: ${tools.join(", ")}. Respond ONLY as JSON {"pipeline":[{"name","instruction","tool"?}]}.`,
+			PipelinePlanSchema,
+		);
+		const stages = pipeline.slice(0, 6).map((s) => ({
+			name: s.name,
+			instruction: s.instruction,
+			tool: s.tool && toolSet.has(s.tool) ? s.tool : undefined,
+		}));
+		if (stages.length) plan.pipeline = stages;
+	} catch {
+		/* no pipeline — engine falls back to the constrained-json decision loop */
+	}
+
+	// Bespoke slash commands.
+	try {
+		const baseCmds = new Set([
+			"help",
+			"clear",
+			"model",
+			"cost",
+			"config",
+			"doctor",
+			"exit",
+		]);
+		const { commands: raw } = await completeJSON(
+			provider,
+			`For the harness "${plan.description}", list up to 4 bespoke slash commands specific to its domain (NOT the base ones: help, clear, model, cost, config, doctor, exit). Each: name, description, behavior (prose). Respond ONLY as JSON {"commands":[{"name","description","behavior"}]}.`,
+			CommandsPlanSchema,
+		);
+		const custom = raw
+			.map((c) => ({ ...c, name: cmdId(c.name) }))
+			.filter((c) => c.name && !baseCmds.has(c.name));
+		if (custom.length) plan.customCommands = custom;
+	} catch {
+		/* no custom commands */
+	}
+
+	// Bespoke skills (procedural memory).
+	try {
+		const { skills } = await completeJSON(
+			provider,
+			`For the harness "${plan.description}", list up to 3 domain skills (procedural recipes teaching the agent how to do its core workflows). Each: name, trigger phrase, guidance (prose steps). Respond ONLY as JSON {"skills":[{"name","trigger","guidance"}]}.`,
+			SkillsPlanSchema,
+		);
+		const custom = skills.filter((s) => s.name && s.guidance);
+		if (custom.length) plan.customSkills = custom;
+	} catch {
+		/* no custom skills */
+	}
+
+	return plan;
+}
+
+function cmdId(n: string): string {
+	return n
+		.toLowerCase()
+		.replace(/^\//, "")
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.slice(0, 30);
 }
 
 /** Clamp an optional model-provided integer into a safe range with a default. */
