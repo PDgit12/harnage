@@ -1571,6 +1571,7 @@ export const GENERATED_TUI = (
 ) => `import { Box, Static, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { useCallback, useRef, useState } from "react";
+import { COMMANDS, findCommand } from "./commands.ts";
 import { LoopEngine, type EngineConfig, type ProviderConfig } from "./engine.ts";
 import type { ModelProfile } from "./profiles.ts";
 import type { Skill } from "./skills.ts";
@@ -1616,6 +1617,7 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
   const [history, setHistory] = useState<HistoryItem[]>([
     { kind: "info", text: "⚙ ${plan.name} — " + config.type + " · " + config.model },
     { kind: "info", text: "  scaffold: " + profile.tier + " tier · " + profile.loop + " loop · " + profile.toolCalling + " · " + profile.maxTools + " tools" },
+    { kind: "info", text: "  type a goal · / for commands · /help for the full list · esc to quit" },
   ]);
   const [input, setInput] = useState("");
   const [streamingText, setStreamingText] = useState("");
@@ -1690,14 +1692,40 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
     busyRef.current = false;
   }, [config, tools, skills, profile, push]);
 
+  // Slash commands run through the harness's own command registry (commands.ts)
+  // — the same set the classic REPL exposes — so the TUI is a first-class way to
+  // invoke /help, /model, /cost, etc., not just a chat box.
+  const handleCommand = useCallback(async (trimmed: string) => {
+    if (trimmed === "/exit" || trimmed === "/quit") { exit(); return; }
+    if (trimmed === "/clear") { setHistory([]); messagesRef.current = undefined; return; }
+    const matched = findCommand(trimmed);
+    if (!matched) { push({ kind: "error", text: "Unknown command '" + trimmed + "'. Type /help." }); return; }
+    try {
+      const mod = await matched.command.load();
+      const handler = mod.default as { call: (args: string[], ctx: unknown) => Promise<{ value: string }> };
+      const result = await handler.call(matched.args, {});
+      if (result.value === "EXIT_APP") { exit(); }
+      else if (result.value === "CLEAR_MESSAGES") { setHistory([]); messagesRef.current = undefined; }
+      else if (result.value) { push({ kind: "info", text: result.value }); }
+    } catch (err) {
+      push({ kind: "error", text: err instanceof Error ? err.message : String(err) });
+    }
+  }, [exit, push]);
+
   const onSubmit = useCallback((value: string) => {
     const trimmed = value.trim();
     setInput("");
     if (!trimmed || busyRef.current) return;
-    if (trimmed === "/exit" || trimmed === "/quit") { exit(); return; }
-    if (trimmed === "/clear") { setHistory([]); messagesRef.current = undefined; return; }
+    if (trimmed.startsWith("/")) { void handleCommand(trimmed); return; }
     void runGoal(trimmed);
-  }, [runGoal, exit]);
+  }, [runGoal, handleCommand]);
+
+  // Live slash-command menu: as soon as the input starts with "/", surface the
+  // matching commands so they are discoverable and highlighted, Claude Code-style.
+  const slashQuery = input.trim().split(" ")[0];
+  const slashMatches = input.startsWith("/") && !busy
+    ? COMMANDS.filter((c) => c.name.startsWith(slashQuery)).slice(0, 6)
+    : [];
 
   return (
     <Box flexDirection="column">
@@ -1734,9 +1762,20 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
         </Box>
       )}
 
+      {slashMatches.length > 0 && (
+        <Box flexDirection="column" paddingLeft={2}>
+          {slashMatches.map((c) => (
+            <Text key={c.name}>
+              <Text color="cyan">{c.name}</Text>
+              <Text dimColor>{"  " + c.description}</Text>
+            </Text>
+          ))}
+        </Box>
+      )}
+
       <Box borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
-        <Text color="cyan">{"❯ "}</Text>
-        <TextInput value={input} onChange={setInput} onSubmit={onSubmit} focus={perm === null} placeholder={busy ? "working…" : "type a goal · /clear · /exit"} />
+        <Text color={input.startsWith("/") ? "magenta" : "cyan"}>{"❯ "}</Text>
+        <TextInput value={input} onChange={setInput} onSubmit={onSubmit} focus={perm === null} placeholder={busy ? "working…" : "type a goal · / for commands"} />
       </Box>
 
       <Box paddingLeft={2} paddingRight={2} justifyContent="space-between">
