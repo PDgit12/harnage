@@ -310,15 +310,19 @@ program
 		await studio();
 	});
 
-// The BUILDER, separate from the reference-harness REPL. Generating a harness
-// needs no model (the deterministic chassis builds offline); a model only makes
-// the plan smarter. So `harnage init` never connects to one unless you ask.
+// The BUILDER, separate from the reference-harness REPL. By default it drives
+// the full bespoke pipeline with the configured build brain (interview → plan →
+// generate custom tools/commands/skills → verify-repair). The deterministic
+// keyword chassis is the fallback when no brain is reachable, so a harness can
+// still be built fully offline.
 program
 	.command("init [description...]")
-	.description("Generate a new harness from a description (no model required)")
+	.description(
+		"Generate a new harness from a description (uses your build brain)",
+	)
 	.option(
 		"--model <id>",
-		"optionally use a local Ollama model to plan the harness",
+		"plan with a specific local Ollama model instead of the configured build brain",
 	)
 	.option("--out <dir>", "output directory (default: current directory)")
 	.action(async (descriptionParts: string[] = [], opts) => {
@@ -330,9 +334,12 @@ program
 			return;
 		}
 		const { buildHarness } = await import("./builder");
+		const { createProvider, createBuildProvider } = await import(
+			"./services/api/client"
+		);
 		let options: Parameters<typeof buildHarness>[3];
+		let brainLabel = "offline chassis (no build brain reachable)";
 		if (opts.model) {
-			const { createProvider } = await import("./services/api/client");
 			options = {
 				provider: createProvider({
 					type: "ollama",
@@ -343,11 +350,33 @@ program
 				}),
 				ask: async (_q: string, d: string) => d, // non-interactive: take defaults
 			};
+			brainLabel = `ollama · ${opts.model}`;
+		} else {
+			// Build brain by default — same resolution as the studio. If nothing is
+			// reachable, options stays undefined and buildHarness uses the keyword path.
+			try {
+				const { resolveProvider } = await import("./services/api/resolve");
+				const cfg = await resolveProvider();
+				const reachable =
+					cfg.type !== "ollama" ||
+					(await fetch(`${cfg.baseUrl ?? "http://localhost:11434"}/api/tags`, {
+						signal: AbortSignal.timeout(1500),
+					})
+						.then((r) => r.ok)
+						.catch(() => false));
+				if (reachable) {
+					options = {
+						provider: createBuildProvider(cfg),
+						ask: async (_q: string, d: string) => d,
+					};
+					brainLabel = `${cfg.type} · ${cfg.model}`;
+				}
+			} catch {
+				/* no build brain — fall through to the offline keyword chassis */
+			}
 		}
 		console.log(
-			chalk.dim(
-				`Building "${description}"${opts.model ? ` — planning with ${opts.model}` : " — offline"}…`,
-			),
+			chalk.dim(`Building "${description}" — build brain: ${brainLabel}…`),
 		);
 		const result = await buildHarness(
 			description,
