@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
-import { HARNESS_MEMORY } from "../src/builder/assemble/harness-templates";
+import { ENGINE_TEMPLATE, HARNESS_MEMORY } from "../src/builder/assemble/harness-templates";
 
 // The memory module ships as a template string emitted into the generated
 // harness, where it runs under Bun (it imports bun:sqlite, so it cannot be
@@ -33,5 +33,13 @@ describe("HARNESS_MEMORY template", () => {
 		// file contains \n rather than a real newline that would break the string.
 		expect(code).toContain('lines.join("\\n")');
 		expect(code).not.toContain('lines.join("\n")');
+	});
+});
+
+describe("engine memory consolidation", () => {
+	const engine = ENGINE_TEMPLATE({ name: "testagent" } as HarnessPlan);
+	it("grammar-forces consolidation JSON so weak models extract reliably", () => {
+		expect(engine).toContain("CONSOLIDATION_SCHEMA");
+		expect(engine).toContain("format: CONSOLIDATION_SCHEMA");
 	});
 });
