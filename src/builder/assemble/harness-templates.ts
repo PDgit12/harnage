@@ -753,6 +753,33 @@ const DECISION_SCHEMA = {
   required: ["action"],
 };
 
+// Grammar for memory consolidation. Passing this as the decode \`format\` makes
+// Ollama (and hosted response_format) emit valid JSON, so a 3B model extracts
+// facts as reliably as a 70B one — the harness caters to the model, not the
+// other way round.
+const CONSOLIDATION_SCHEMA = {
+  type: "object",
+  properties: {
+    facts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { subject: { type: "string" }, fact: { type: "string" } },
+        required: ["subject", "fact"],
+      },
+    },
+    events: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { event: { type: "string" }, when: { type: "string" } },
+        required: ["event"],
+      },
+    },
+  },
+  required: ["facts", "events"],
+};
+
 interface Decision { action: "tool" | "final"; tool?: string; args?: Record<string, unknown>; answer?: string; }
 
 /** Parse a (possibly prose-wrapped) decision object; null if unrecoverable. */
@@ -1079,7 +1106,8 @@ export class LoopEngine {
     ];
     let raw = "";
     try {
-      for await (const e of streamProvider(this.config, req)) {
+      // Grammar-force valid JSON so weak models extract as reliably as strong ones.
+      for await (const e of streamProvider(this.config, req, undefined, { format: CONSOLIDATION_SCHEMA, temperature: 0 })) {
         if (e.type === "text") raw += e.content ?? "";
       }
     } catch {
