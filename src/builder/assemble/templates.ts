@@ -400,7 +400,21 @@ export const VITEST_CONFIG = `import { defineConfig } from "vitest/config";
 export default defineConfig({ test: { include: ["tests/**/*.test.ts"] } });
 `;
 
-export const COMMANDS_REGISTRY = `export interface Command {
+export const COMMANDS_REGISTRY = (plan: HarnessPlan) => {
+	// Bespoke commands the build brain generated for this harness's domain,
+	// registered alongside the base set so the TUI slash-menu surfaces them.
+	const custom = (plan.customCommands ?? [])
+		.map((c) => {
+			const id = c.name
+				.toLowerCase()
+				.replace(/^\//, "")
+				.replace(/[^a-z0-9]+/g, "_")
+				.replace(/^_+|_+$/g, "")
+				.slice(0, 30);
+			return `  { type: "local", name: "/${id}", description: ${JSON.stringify(c.description).replace(/`/g, "\\`")}, load: () => import("./commands/${id}.ts") },`;
+		})
+		.join("\n");
+	return `export interface Command {
   type: "local";
   name: string;
   description: string;
@@ -415,6 +429,7 @@ export const COMMANDS: Command[] = [
   { type: "local", name: "/model", description: "Switch or view current model", load: () => import("./commands/model.ts") },
   { type: "local", name: "/config", description: "Configure provider", load: () => import("./commands/config.ts") },
   { type: "local", name: "/exit", description: "Exit the CLI", load: () => import("./commands/exit.ts") },
+${custom}
 ];
 
 export function findCommand(input: string): { command: Command; args: string[] } | null {
@@ -434,6 +449,7 @@ export function parseSlashCommand(input: string): { name: string; args: string[]
   return { name: \`/\${name}\`, args: parts.slice(1) };
 }
 `;
+};
 
 export const PROVIDER_SERVICE = `type CostTracker = {
   tokensIn: number;

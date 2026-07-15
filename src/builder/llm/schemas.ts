@@ -21,6 +21,16 @@ export const SpecSchema = z.object({
 	customTools: z
 		.array(z.object({ name: z.string(), description: z.string() }))
 		.optional(),
+	customSkills: z
+		.array(
+			z.object({
+				name: z.string(),
+				trigger: z.string().describe("phrase that should activate this skill"),
+				guidance: z.string().describe("the procedural recipe, in prose"),
+			}),
+		)
+		.optional()
+		.describe("domain-specific procedural recipes (how the agent should act)"),
 });
 export type LLMSpec = z.infer<typeof SpecSchema>;
 
@@ -56,6 +66,15 @@ export const PlanSchema = z.object({
 				name: z.string(),
 				description: z.string(),
 				behavior: z.string().describe("what the command should do, in prose"),
+			}),
+		)
+		.optional(),
+	customSkills: z
+		.array(
+			z.object({
+				name: z.string(),
+				trigger: z.string().describe("phrase that should activate this skill"),
+				guidance: z.string().describe("the procedural recipe, in prose"),
 			}),
 		)
 		.optional(),

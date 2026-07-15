@@ -28,6 +28,14 @@ export interface HarnessPlan {
 	modelProfileOverrides?: Record<string, unknown>;
 	/** Baked domain pipeline stages for the small-model tier (Engine v3). */
 	pipeline?: Array<{ name: string; instruction: string; tool?: string }>;
+	/** LLM-planned bespoke slash commands (code generated in the GENERATE stage). */
+	customCommands?: Array<{
+		name: string;
+		description: string;
+		behavior: string;
+	}>;
+	/** LLM-planned bespoke skills (procedural memory) rendered as skills/*.md. */
+	customSkills?: Array<{ name: string; trigger: string; guidance: string }>;
 }
 
 export interface BuildProgress {
@@ -170,6 +178,48 @@ export async function buildHarness(
 						message: "Custom tool generation failed — continuing without",
 						detail: err instanceof Error ? err.message : String(err),
 					});
+				}
+			}
+			// GENERATE stage: bespoke slash-command code from the planned behavior.
+			// Skills are rendered deterministically in assemble (no LLM call needed).
+			if (plan.customCommands?.length) {
+				onProgress?.({
+					stage: "building",
+					message: "Generating custom commands...",
+				});
+				try {
+					const { runGenerateCommands } = await import("./llm/generate");
+					const cmds = await runGenerateCommands(
+						options.provider,
+						plan.customCommands,
+						plan.description,
+					);
+					if (cmds.length) {
+						extraFiles = [
+							...(extraFiles ?? []),
+							...cmds.map((c) => ({ path: c.path, code: c.code })),
+						];
+						// Keep only the commands that actually generated, so the registry
+						// never references a missing module.
+						const built = new Set(cmds.map((c) => c.id));
+						plan.customCommands = plan.customCommands.filter((c) =>
+							built.has(
+								c.name
+									.toLowerCase()
+									.replace(/^\//, "")
+									.replace(/[^a-z0-9]+/g, "_")
+									.replace(/^_+|_+$/g, "")
+									.slice(0, 30),
+							),
+						);
+					}
+				} catch (err) {
+					onProgress?.({
+						stage: "building",
+						message: "Custom command generation failed — continuing without",
+						detail: err instanceof Error ? err.message : String(err),
+					});
+					plan.customCommands = undefined;
 				}
 			}
 		}
