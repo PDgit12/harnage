@@ -62,6 +62,7 @@ import { makeAgentTool } from "./subagent.ts";
 import { resolveProfile } from "./profiles.ts";
 import { loadSession } from "./session.ts";
 import { loadSkills } from "./skills.ts";
+import { printTrace } from "./trace.ts";
 
 // ─── Config ──────────────────────────────────────────────────────
 
@@ -296,6 +297,7 @@ program.name("${plan.name}").description("${plan.description}").version("0.1.0")
   }
   await startRepl(Boolean(opts.resume));
 });
+program.command("trace").description("Summarize the local audit trail: runs, latency, tool calls, eval pass rate").action(() => { printTrace(); });
 program.parse();
 `;
 
@@ -519,6 +521,7 @@ verify with the egress check in the project it was generated from.
 
 \`\`\`bash
 ./${plan.name} --classic     # starts with no network → prints its scaffold tier
+./${plan.name} trace         # ops summary: runs, latency, tool calls, eval pass rate
 # after a run, inspect the local audit trail:
 cat ~/.${plan.name}/audit.jsonl
 # and the permission policy your security team pins:
@@ -530,6 +533,16 @@ cat ~/.${plan.name}/permissions.json
 - \`HARNAGE_SANDBOX=docker\` — run every shell command in \`docker run --rm
   --network none\`, working dir mounted, no network.
 - \`HARNAGE_AUDIT=off\` — disable the audit trail (on by default).
+- \`HARNAGE_MEMORY=off\` — disable long-term memory reads/writes.
+- \`HARNAGE_JUDGE=on\` — add an LLM-as-judge score to each run's eval (costs a call).
+
+## Evaluation & ops (LLMops, local)
+
+Every top-level run is graded in-loop: deterministic quality rules always run
+(empty/stopped/non-prose/tool-use checks), and \`HARNAGE_JUDGE=on\` adds a 1–5
+LLM-as-judge score. Verdicts are appended to the local audit trail — nothing
+leaves the machine — and \`${plan.name} trace\` summarizes runs, latency, tool
+calls, and eval pass rate in the terminal. No external tracing service.
 `;
 
 export const SECURITY_MD_TEMPLATE = (
