@@ -28,7 +28,11 @@ describe("COMMANDS_REGISTRY", () => {
 		const code = COMMANDS_REGISTRY({
 			...base,
 			customCommands: [
-				{ name: "/review", description: "Review the diff", behavior: "git diff" },
+				{
+					name: "/review",
+					description: "Review the diff",
+					behavior: "git diff",
+				},
 			],
 		});
 		expect(code).toContain('name: "/review"');

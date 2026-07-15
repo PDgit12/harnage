@@ -36,6 +36,13 @@ export interface HarnessPlan {
 	}>;
 	/** LLM-planned bespoke skills (procedural memory) rendered as skills/*.md. */
 	customSkills?: Array<{ name: string; trigger: string; guidance: string }>;
+	/** Bounded chassis knobs baked into the generated engine. */
+	config?: {
+		maxIterations?: number;
+		memory?: boolean;
+		eval?: boolean;
+		judgeByDefault?: boolean;
+	};
 }
 
 export interface BuildProgress {

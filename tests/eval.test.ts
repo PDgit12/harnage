@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
-import { HARNESS_EVAL, HARNESS_TRACE } from "../src/builder/assemble/harness-templates";
+import {
+	HARNESS_EVAL,
+	HARNESS_TRACE,
+} from "../src/builder/assemble/harness-templates";
 
 // eval.ts is pure (no Bun-only imports), so we write it to a temp file and
 // import it to exercise the real graders — doubling as an escaping check.
@@ -19,7 +22,10 @@ const mod = (await import(file)) as {
 		toolCount: number,
 	) => EvalResult[];
 	parseJudgeScore: (raw: string) => EvalResult | null;
-	judgeRequest: (goal: string, answer: string) => Array<Record<string, unknown>>;
+	judgeRequest: (
+		goal: string,
+		answer: string,
+	) => Array<Record<string, unknown>>;
 };
 
 describe("generated eval graders", () => {
@@ -38,7 +44,12 @@ describe("generated eval graders", () => {
 	});
 
 	it("flags a stopped run and no tool use", () => {
-		const r = mod.runDeterministicEvals("do x", "Stopped: too many failures", [], 2);
+		const r = mod.runDeterministicEvals(
+			"do x",
+			"Stopped: too many failures",
+			[],
+			2,
+		);
 		const map = Object.fromEntries(r.map((e) => [e.name, e.pass]));
 		expect(map.completed_without_stop).toBe(false);
 		expect(map.used_tool_when_available).toBe(false);
