@@ -88,7 +88,7 @@ export async function assembleAndVerify(
 	await writeFile(join(srcDir, "main.tsx"), MAIN_ENTRY_TEMPLATE(plan));
 	await writeFile(join(srcDir, "Tool.ts"), TOOL_TYPESCRIPT);
 	await writeFile(join(srcDir, "tools.ts"), TOOLS_REGISTRY(plan));
-	await writeFile(join(srcDir, "commands.ts"), COMMANDS_REGISTRY);
+	await writeFile(join(srcDir, "commands.ts"), COMMANDS_REGISTRY(plan));
 	await writeFile(join(srcDir, "services/provider.ts"), PROVIDER_SERVICE);
 	await writeFile(
 		join(outputDir, "tsconfig.json"),
@@ -121,6 +121,18 @@ export async function assembleAndVerify(
 		join(outputDir, "skills", "verify-before-done.md"),
 		EXAMPLE_SKILL(plan),
 	);
+	// Bespoke skills (procedural memory) the build brain planned for this domain,
+	// rendered deterministically into the same frontmatter shape as the example.
+	for (const skill of plan.customSkills ?? []) {
+		const slug =
+			skill.name
+				.toLowerCase()
+				.replace(/[^a-z0-9]+/g, "-")
+				.replace(/^-+|-+$/g, "")
+				.slice(0, 40) || "skill";
+		const md = `---\nname: ${slug}\ndescription: ${skill.name}\ntriggers: ${skill.trigger ?? ""}\n---\n${skill.guidance}\n`;
+		await writeFile(join(outputDir, "skills", `${slug}.md`), md);
+	}
 
 	// The plan's system prompt IS the agent's identity — write it where the
 	// generated engine loads it (cwd/.<name>/system.md). Tool-discipline rule
