@@ -230,6 +230,141 @@ export class MemoryStore {
 }
 `;
 
+// Eval-in-loop: grade every run. Deterministic rules are cheap and local; the
+// LLM judge is opt-in (HARNAGE_JUDGE=on) since it costs a model call. The engine
+// logs results to the audit trail, and the `trace` command summarizes them.
+export const HARNESS_EVAL = `// Post-run evaluation: deterministic rules + an opt-in LLM judge.
+export interface EvalResult { name: string; pass: boolean; detail?: string; }
+type Msg = Record<string, unknown>;
+
+/** Cheap deterministic quality rules — no model call. */
+export function runDeterministicEvals(goal: string, answer: string, messages: Msg[], toolCount: number): EvalResult[] {
+  const out: EvalResult[] = [];
+  const a = (answer ?? "").trim();
+  out.push({ name: "non_empty_answer", pass: a.length > 0 });
+  out.push({ name: "completed_without_stop", pass: !/^Stopped:|^Error:/.test(a) });
+  // Prose, not a raw JSON/blob dump (weak models sometimes leak scaffolding).
+  const first = a[0];
+  const last = a[a.length - 1];
+  const looksBlob = (first === "{" || first === "[") && (last === "}" || last === "]");
+  out.push({ name: "prose_answer", pass: a.length === 0 ? true : !looksBlob });
+  // A harness with tools should usually touch at least one on a real task.
+  if (toolCount > 0) {
+    const usedTool = messages.some((m) => m.role === "tool" || (typeof m.content === "string" && m.content.startsWith("Observation from ")));
+    out.push({ name: "used_tool_when_available", pass: usedTool });
+  }
+  return out;
+}
+
+export const JUDGE_SYSTEM = 'You are a strict evaluator. Score how well the assistant answer addresses the user request, from 1 (useless) to 5 (excellent). Reply with only: SCORE: <n> — <one short reason>.';
+
+/** Build the judge request (the engine streams it with its own provider). */
+export function judgeRequest(goal: string, answer: string): Msg[] {
+  return [
+    { role: "system", content: JUDGE_SYSTEM },
+    { role: "user", content: ("Request: " + goal + "\\nAnswer: " + answer).slice(0, 4000) },
+  ];
+}
+
+/** Parse the judge's 1–5 score from raw text. Returns null if unscorable. */
+export function parseJudgeScore(raw: string): EvalResult | null {
+  const m = (raw ?? "").match(/[1-5]/);
+  if (!m) return null;
+  const score = Number(m[0]);
+  return { name: "judge_quality", pass: score >= 3, detail: "score " + score + "/5" };
+}
+`;
+
+// Sovereign ops view: a \`trace\` command that summarizes the local audit trail
+// (runs, latency, tool calls, eval pass rate) — the LLMops pillar, terminal-first,
+// no cloud, no external tracing service.
+export const HARNESS_TRACE = (
+	plan: HarnessPlan,
+) => `// Ops summary over the local audit trail (~/.${plan.name}/audit.jsonl).
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import chalk from "chalk";
+
+const AUDIT_PATH = join(homedir(), ".${plan.name}", "audit.jsonl");
+
+interface Entry { ts?: string; kind?: string; [k: string]: unknown; }
+
+function load(): Entry[] {
+  if (!existsSync(AUDIT_PATH)) return [];
+  const out: Entry[] = [];
+  for (const line of readFileSync(AUDIT_PATH, "utf-8").split("\\n")) {
+    const s = line.trim();
+    if (!s) continue;
+    try { out.push(JSON.parse(s) as Entry); } catch { /* skip malformed line */ }
+  }
+  return out;
+}
+
+export function printTrace(): void {
+  const entries = load();
+  if (entries.length === 0) {
+    console.log(chalk.dim("No trace yet — run the agent first. (Audit path: " + AUDIT_PATH + ")"));
+    return;
+  }
+  const runs = entries.filter((e) => e.kind === "run_start").length;
+  const ends = entries.filter((e) => e.kind === "run_end");
+  const latencies = ends.map((e) => Number(e.ms)).filter((n) => Number.isFinite(n) && n > 0);
+  const avgMs = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
+  const maxMs = latencies.length ? Math.max(...latencies) : 0;
+  const chars = ends.map((e) => Number(e.chars)).filter((n) => Number.isFinite(n));
+  const estTokens = Math.round(chars.reduce((a, b) => a + b, 0) / 4);
+
+  const toolCalls = entries.filter((e) => e.kind === "tool_call");
+  const byTool = new Map<string, { ok: number; fail: number }>();
+  for (const t of toolCalls) {
+    const name = String(t.tool ?? "?");
+    const rec = byTool.get(name) ?? { ok: 0, fail: 0 };
+    if (t.ok === false) rec.fail++; else rec.ok++;
+    byTool.set(name, rec);
+  }
+  const denies = entries.filter((e) => e.kind === "permission_deny").length;
+  const recalls = entries.filter((e) => e.kind === "memory_recall").length;
+  const consolidations = entries.filter((e) => e.kind === "memory_consolidate").length;
+
+  const evals = entries.filter((e) => e.kind === "eval");
+  const evalPass = evals.filter((e) => e.pass === true).length;
+  const byEval = new Map<string, { pass: number; total: number }>();
+  for (const e of evals) {
+    const name = String(e.name ?? "?");
+    const rec = byEval.get(name) ?? { pass: 0, total: 0 };
+    rec.total++;
+    if (e.pass === true) rec.pass++;
+    byEval.set(name, rec);
+  }
+
+  console.log();
+  console.log(chalk.bold("  ${plan.name} — ops trace"));
+  console.log(chalk.dim("  " + AUDIT_PATH));
+  console.log();
+  console.log("  " + chalk.bold("Runs") + "          " + runs);
+  console.log("  " + chalk.bold("Latency") + "       avg " + avgMs + "ms · max " + maxMs + "ms");
+  console.log("  " + chalk.bold("Est. tokens") + "   ~" + estTokens + chalk.dim(" (chars/4 over all replies)"));
+  console.log("  " + chalk.bold("Tool calls") + "    " + toolCalls.length + (denies ? chalk.yellow("  · " + denies + " denied") : ""));
+  for (const [name, rec] of byTool) {
+    console.log("    " + chalk.cyan(name.padEnd(14)) + rec.ok + " ok" + (rec.fail ? chalk.red("  " + rec.fail + " fail") : ""));
+  }
+  console.log("  " + chalk.bold("Memory") + "        " + recalls + " recalls · " + consolidations + " consolidations");
+  if (evals.length) {
+    const pct = Math.round((evalPass / evals.length) * 100);
+    const color = pct >= 80 ? chalk.green : pct >= 50 ? chalk.yellow : chalk.red;
+    console.log("  " + chalk.bold("Eval pass") + "     " + color(pct + "%") + chalk.dim(" (" + evalPass + "/" + evals.length + " checks)"));
+    for (const [name, rec] of byEval) {
+      const p = Math.round((rec.pass / rec.total) * 100);
+      console.log("    " + chalk.dim(name.padEnd(28)) + rec.pass + "/" + rec.total + " (" + p + "%)");
+    }
+  } else {
+    console.log("  " + chalk.bold("Eval pass") + "     " + chalk.dim("no evals logged yet"));
+  }
+  console.log();
+}
+`;
+
 export const HARNESS_PERMISSIONS = (
 	plan: HarnessPlan,
 ) => `// Permission system with path rules. Modes:
@@ -498,6 +633,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Tool, ToolContext } from "./Tool.ts";
 import { compactMessages, estimateTokens } from "./compaction.ts";
+import { judgeRequest, parseJudgeScore, runDeterministicEvals } from "./eval.ts";
 import { MemoryStore } from "./memory.ts";
 import { checkPermission, loadPolicy, type PermissionPolicy, savePolicy, targetOf } from "./permissions.ts";
 import { PIPELINE } from "./pipeline.ts";
@@ -886,6 +1022,7 @@ export class LoopEngine {
   getMessages(): Array<Record<string, unknown>> { return this.messages; }
 
   async run(goal: string): Promise<string> {
+    const startedAt = Date.now();
     audit("run_start", { goal: goal.slice(0, 300), model: this.config.model, tier: this.profile.tier });
     this.messages.push({ role: "user", content: goal });
     // Retrieval gate (deterministic): pull matching long-term memory into the
@@ -907,7 +1044,26 @@ export class LoopEngine {
     if (this.memory && result && !/^Stopped:|^Error:/.test(result.trim())) {
       await this.consolidate(goal, result);
     }
-    audit("run_end", { model: this.config.model, chars: result.length });
+    // Eval-in-loop: grade every top-level run and log the verdict to the audit
+    // trail (the ops store). Deterministic rules always run (cheap, local);
+    // the LLM judge runs only when HARNAGE_JUDGE=on (it costs a model call).
+    if (this.persistSession) {
+      try {
+        const evals = runDeterministicEvals(goal, result, this.messages, this.tools.length);
+        if (process.env.HARNAGE_JUDGE === "on") {
+          let raw = "";
+          try {
+            for await (const e of streamProvider(this.config, judgeRequest(goal, result))) {
+              if (e.type === "text") raw += e.content ?? "";
+            }
+          } catch { /* judge call failed — skip, keep deterministic evals */ }
+          const judged = parseJudgeScore(raw);
+          if (judged) evals.push(judged);
+        }
+        for (const e of evals) audit("eval", { name: e.name, pass: e.pass, detail: e.detail ?? "" });
+      } catch { /* eval is best-effort — never affect the returned answer */ }
+    }
+    audit("run_end", { model: this.config.model, chars: result.length, ms: Date.now() - startedAt });
     return result;
   }
 
