@@ -556,6 +556,14 @@ Every run appends to \`~/.${plan.name}/audit.jsonl\` (JSONL, local, never
 transmitted): run boundaries, every tool execution and its target, and
 denied/rejected tool calls. On by default; \`HARNAGE_AUDIT=off\` to disable.
 
+## Long-term memory — local, sovereign
+Durable facts and dated events the agent learns are stored in a local SQLite DB
+at \`~/.${plan.name}/memory.db\` (semantic + episodic tiers). It is written and
+read only on this machine and never transmitted. Inspect it with any SQLite
+client; delete the file to wipe memory. On by default; \`HARNAGE_MEMORY=off\`
+disables all reads and writes. Retrieval is deterministic keyword matching — no
+model decides what to recall, and sub-agents never write to the store.
+
 ## Permission model — deny-first, policy-as-file
 Tool calls are checked before execution; a tool with no matching allow rule is
 blocked, not run. The policy is a plain inspectable file at

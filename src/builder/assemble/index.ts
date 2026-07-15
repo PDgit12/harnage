@@ -12,6 +12,7 @@ import {
 	EXAMPLE_SKILL,
 	GENERATED_TUI,
 	HARNESS_COMPACTION,
+	HARNESS_MEMORY,
 	HARNESS_PERMISSIONS,
 	HARNESS_PROFILES,
 	HARNESS_SESSION,
@@ -105,6 +106,7 @@ export async function assembleAndVerify(
 	await writeFile(join(srcDir, "pipeline.ts"), PIPELINE_TEMPLATE(plan));
 	await writeFile(join(srcDir, "engine.ts"), ENGINE_TEMPLATE(plan));
 	await writeFile(join(srcDir, "compaction.ts"), HARNESS_COMPACTION);
+	await writeFile(join(srcDir, "memory.ts"), HARNESS_MEMORY(plan));
 	await writeFile(join(srcDir, "permissions.ts"), HARNESS_PERMISSIONS(plan));
 	await writeFile(join(srcDir, "skills.ts"), HARNESS_SKILLS);
 	await writeFile(join(srcDir, "session.ts"), HARNESS_SESSION(plan));

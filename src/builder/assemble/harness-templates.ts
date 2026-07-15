@@ -129,6 +129,107 @@ export async function compactMessages(
 }
 `;
 
+// Long-term memory tier: semantic (durable facts) + episodic (dated events),
+// stored in a local bun:sqlite DB under ~/.<name>/memory.db. Procedural memory
+// is the skills/ system; working memory is compaction.ts. Fully sovereign —
+// nothing leaves the machine. Off switch: HARNAGE_MEMORY=off. The retrieval
+// "gate" is deterministic keyword-overlap: an empty match IS the gate deciding
+// to skip, so a small model is never asked to make that call.
+export const HARNESS_MEMORY = (
+	plan: HarnessPlan,
+) => `// 3-tier memory (semantic + episodic). Local bun:sqlite; nothing leaves the box.
+import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { Database } from "bun:sqlite";
+
+const DB_PATH = join(homedir(), ".${plan.name}", "memory.db");
+
+export interface RecalledFact { subject: string; fact: string; }
+export interface RecalledEvent { event: string; occurred_at: string; }
+
+export class MemoryStore {
+  private db: Database | null = null;
+
+  /** Lazily open the DB. Returns null when memory is disabled or unavailable —
+   * every caller no-ops on null, so memory failures never break a run. */
+  private open(): Database | null {
+    if (process.env.HARNAGE_MEMORY === "off") return null;
+    if (this.db) return this.db;
+    try {
+      mkdirSync(dirname(DB_PATH), { recursive: true });
+      const db = new Database(DB_PATH);
+      db.run("CREATE TABLE IF NOT EXISTS semantic (subject TEXT NOT NULL, fact TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (subject, fact))");
+      db.run("CREATE TABLE IF NOT EXISTS episodic (event TEXT NOT NULL, occurred_at TEXT NOT NULL, created_at TEXT NOT NULL)");
+      this.db = db;
+      return db;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Upsert a durable fact (identity, preference, relationship). */
+  saveFact(subject: string, fact: string): void {
+    const db = this.open();
+    if (!db) return;
+    const s = subject.trim();
+    const f = fact.trim();
+    if (!s || !f) return;
+    try {
+      db.run("INSERT OR REPLACE INTO semantic (subject, fact, updated_at) VALUES (?, ?, ?)", [s, f, new Date().toISOString()]);
+    } catch { /* best-effort */ }
+  }
+
+  /** Record a dated event. */
+  saveEvent(event: string, occurredAt?: string): void {
+    const db = this.open();
+    if (!db) return;
+    const e = event.trim();
+    if (!e) return;
+    const when = (occurredAt ?? "").trim() || new Date().toISOString();
+    try {
+      db.run("INSERT INTO episodic (event, occurred_at, created_at) VALUES (?, ?, ?)", [e, when, new Date().toISOString()]);
+    } catch { /* best-effort */ }
+  }
+
+  /** Deterministic retrieval gate: keyword-overlap match against both tiers.
+   * Returns a formatted block, or "" when nothing matches — that empty string
+   * is the gate deciding "skip retrieval", with no model call needed. */
+  recall(query: string, limit = 8): string {
+    const db = this.open();
+    if (!db) return "";
+    const words = query.toLowerCase().match(/[a-z0-9]{4,}/g);
+    if (!words || words.length === 0) return "";
+    const terms = [...new Set(words)].slice(0, 12);
+    try {
+      const facts = new Map<string, string>();
+      const events = new Map<string, string>();
+      for (const w of terms) {
+        const like = "%" + w + "%";
+        const fr = db.query("SELECT subject, fact FROM semantic WHERE lower(subject) LIKE ? OR lower(fact) LIKE ? LIMIT ?").all(like, like, limit) as RecalledFact[];
+        for (const r of fr) facts.set(r.subject + "|" + r.fact, r.subject + ": " + r.fact);
+        const er = db.query("SELECT event, occurred_at FROM episodic WHERE lower(event) LIKE ? ORDER BY occurred_at DESC LIMIT ?").all(like, limit) as RecalledEvent[];
+        for (const r of er) events.set(r.event, (r.occurred_at || "").slice(0, 10) + " — " + r.event);
+      }
+      const f = [...facts.values()].slice(0, limit);
+      const e = [...events.values()].slice(0, limit);
+      if (f.length === 0 && e.length === 0) return "";
+      const lines: string[] = [];
+      if (f.length) lines.push("Known facts:", ...f.map((x) => "- " + x));
+      if (e.length) lines.push("Relevant past events:", ...e.map((x) => "- " + x));
+      return lines.join("\\n");
+    } catch {
+      return "";
+    }
+  }
+
+  close(): void {
+    try { this.db?.close(); } catch { /* ignore */ }
+    this.db = null;
+  }
+}
+`;
+
 export const HARNESS_PERMISSIONS = (
 	plan: HarnessPlan,
 ) => `// Permission system with path rules. Modes:
@@ -397,6 +498,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Tool, ToolContext } from "./Tool.ts";
 import { compactMessages, estimateTokens } from "./compaction.ts";
+import { MemoryStore } from "./memory.ts";
 import { checkPermission, loadPolicy, type PermissionPolicy, savePolicy, targetOf } from "./permissions.ts";
 import { PIPELINE } from "./pipeline.ts";
 import { type ModelProfile, resolveProfile } from "./profiles.ts";
@@ -757,6 +859,9 @@ export class LoopEngine {
   private nudged = false;
   private escalated = false;
   private fallbackModel?: string;
+  // Long-term memory: on for top-level user sessions, off for sub-agents
+  // (persistSession false) so spawned agents never pollute the durable store.
+  private memory: MemoryStore | null = null;
 
   constructor(config: EngineConfig) {
     this.tools = config.tools;
@@ -768,6 +873,7 @@ export class LoopEngine {
     this.policy = config.policy ?? loadPolicy();
     this.profile = config.profile ?? resolveProfile(this.config.model, this.config.contextTokens);
     this.fallbackModel = config.fallbackModel;
+    this.memory = this.persistSession ? new MemoryStore() : null;
     this.messages = config.initialMessages ? [...config.initialMessages] : [];
     this.toolContext = {
       cwd: process.cwd(),
@@ -782,11 +888,69 @@ export class LoopEngine {
   async run(goal: string): Promise<string> {
     audit("run_start", { goal: goal.slice(0, 300), model: this.config.model, tier: this.profile.tier });
     this.messages.push({ role: "user", content: goal });
+    // Retrieval gate (deterministic): pull matching long-term memory into the
+    // transcript before the loop. Empty match = skip, no model call. Seeded as
+    // the first message so every dispatch mode inherits it.
+    if (this.memory) {
+      const recalled = this.memory.recall(goal);
+      if (recalled) {
+        this.onEvent?.({ type: "status", content: "recalled long-term memory" });
+        this.messages.unshift({ role: "system", content: "Relevant long-term memory from earlier sessions:\\n" + recalled });
+        audit("memory_recall", { chars: recalled.length });
+      }
+    }
     let result = await this.dispatch(goal);
     // Router fallback: a stuck small/mid loop gets one escalated retry.
     if (this.shouldEscalate(result)) result = await this.escalate(goal);
+    // Consolidation: after a successful reply, extract durable facts + dated
+    // events into the semantic/episodic store. Best-effort, never throws.
+    if (this.memory && result && !/^Stopped:|^Error:/.test(result.trim())) {
+      await this.consolidate(goal, result);
+    }
     audit("run_end", { model: this.config.model, chars: result.length });
     return result;
+  }
+
+  /** One post-reply extraction call → durable facts + dated events. JSON is
+   * pulled with indexOf slicing (no regex) and parsed defensively; any failure
+   * is swallowed so memory writes never affect the answer already returned. */
+  private async consolidate(goal: string, answer: string): Promise<void> {
+    if (!this.memory) return;
+    const sys = 'Extract durable facts and dated events from this exchange as strict JSON. Output an object with two arrays: "facts" (each {subject, fact}) and "events" (each {event, when} where when is YYYY-MM-DD). Only stable, reusable facts (identities, preferences, relationships) and concrete dated events. Use empty arrays if there is nothing worth remembering. Output JSON only, no prose.';
+    const req = [
+      { role: "system", content: sys },
+      { role: "user", content: ("User: " + goal + "\\nAssistant: " + answer).slice(0, 4000) },
+    ];
+    let raw = "";
+    try {
+      for await (const e of streamProvider(this.config, req)) {
+        if (e.type === "text") raw += e.content ?? "";
+      }
+    } catch {
+      return;
+    }
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end <= start) return;
+    try {
+      const parsed = JSON.parse(raw.slice(start, end + 1)) as {
+        facts?: Array<{ subject?: string; fact?: string }>;
+        events?: Array<{ event?: string; when?: string }>;
+      };
+      let stored = 0;
+      for (const f of parsed.facts ?? []) {
+        if (f.subject && f.fact) { this.memory.saveFact(f.subject, f.fact); stored++; }
+      }
+      for (const ev of parsed.events ?? []) {
+        if (ev.event) { this.memory.saveEvent(ev.event, ev.when); stored++; }
+      }
+      if (stored > 0) {
+        this.onEvent?.({ type: "status", content: "consolidated " + stored + " memory item(s)" });
+        audit("memory_consolidate", { stored });
+      }
+    } catch {
+      /* malformed JSON — skip, do not disturb the returned answer */
+    }
   }
 
   /** Dispatch by the resolved model profile — Engine v3's core move. Strong
