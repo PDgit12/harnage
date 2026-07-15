@@ -673,6 +673,16 @@ function audit(kind: string, data: Record<string, unknown>): void {
   } catch { /* audit is best-effort — never throw into the loop */ }
 }
 
+// Chassis config baked at build time from the harness plan (tuned to this
+// agent's domain). Runtime env vars still win: HARNAGE_MEMORY=off,
+// HARNAGE_JUDGE=on/off, HARNAGE_AUDIT=off.
+const CONFIG = {
+  maxIterations: ${plan.config?.maxIterations ?? 20},
+  memory: ${plan.config?.memory ?? true},
+  eval: ${plan.config?.eval ?? true},
+  judgeByDefault: ${plan.config?.judgeByDefault ?? false},
+};
+
 export class SafetyMonitor {
   private failures = 0;
 
@@ -1036,7 +1046,7 @@ export class LoopEngine {
     this.policy = config.policy ?? loadPolicy();
     this.profile = config.profile ?? resolveProfile(this.config.model, this.config.contextTokens);
     this.fallbackModel = config.fallbackModel;
-    this.memory = this.persistSession ? new MemoryStore() : null;
+    this.memory = this.persistSession && CONFIG.memory ? new MemoryStore() : null;
     this.messages = config.initialMessages ? [...config.initialMessages] : [];
     this.toolContext = {
       cwd: process.cwd(),
@@ -1074,10 +1084,10 @@ export class LoopEngine {
     // Eval-in-loop: grade every top-level run and log the verdict to the audit
     // trail (the ops store). Deterministic rules always run (cheap, local);
     // the LLM judge runs only when HARNAGE_JUDGE=on (it costs a model call).
-    if (this.persistSession) {
+    if (this.persistSession && CONFIG.eval) {
       try {
         const evals = runDeterministicEvals(goal, result, this.messages, this.tools.length);
-        if (process.env.HARNAGE_JUDGE === "on") {
+        if (process.env.HARNAGE_JUDGE === "on" || (CONFIG.judgeByDefault && process.env.HARNAGE_JUDGE !== "off")) {
           let raw = "";
           try {
             for await (const e of streamProvider(this.config, judgeRequest(goal, result))) {
@@ -1200,7 +1210,7 @@ export class LoopEngine {
 
     while (true) {
       iteration++;
-      const verdict = this.safety.check(iteration);
+      const verdict = this.safety.check(iteration, CONFIG.maxIterations);
       if (verdict.shouldStop) return \`Stopped: \${verdict.reason}\`;
 
       await this.maybeCompact();
@@ -1348,7 +1358,7 @@ export class LoopEngine {
 
     while (true) {
       iteration++;
-      const verdict = this.safety.check(iteration);
+      const verdict = this.safety.check(iteration, CONFIG.maxIterations);
       if (verdict.shouldStop) return \`Stopped: \${verdict.reason}\`;
 
       await this.maybeCompact();

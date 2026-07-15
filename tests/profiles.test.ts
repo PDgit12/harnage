@@ -84,7 +84,12 @@ writeFileSync(
 	}),
 );
 const baked = (await import(bakedFile)) as {
-	resolveProfile: (m: string) => { loop: string; toolCalling: string; maxTools: number; tier: string };
+	resolveProfile: (m: string) => {
+		loop: string;
+		toolCalling: string;
+		maxTools: number;
+		tier: string;
+	};
 };
 
 describe("baked per-model overrides", () => {

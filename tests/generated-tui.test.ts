@@ -10,7 +10,9 @@ const code = GENERATED_TUI({ name: "testagent" } as HarnessPlan);
 
 describe("generated harness TUI — slash commands", () => {
 	it("imports the command registry", () => {
-		expect(code).toContain('import { COMMANDS, findCommand } from "./commands.ts"');
+		expect(code).toContain(
+			'import { COMMANDS, findCommand } from "./commands.ts"',
+		);
 	});
 
 	it("routes slash input through the registry, not just hardcoded cases", () => {

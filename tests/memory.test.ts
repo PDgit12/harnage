@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
-import { ENGINE_TEMPLATE, HARNESS_MEMORY } from "../src/builder/assemble/harness-templates";
+import {
+	ENGINE_TEMPLATE,
+	HARNESS_MEMORY,
+} from "../src/builder/assemble/harness-templates";
 
 // The memory module ships as a template string emitted into the generated
 // harness, where it runs under Bun (it imports bun:sqlite, so it cannot be

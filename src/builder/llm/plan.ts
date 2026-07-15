@@ -136,5 +136,22 @@ Respond with ONLY a JSON object in that shape.`;
 		...(pipeline?.length ? { pipeline } : {}),
 		...(customCommands.length ? { customCommands } : {}),
 		...(customSkills.length ? { customSkills } : {}),
+		config: {
+			maxIterations: clampInt(raw.config?.maxIterations, 1, 100, 20),
+			memory: raw.config?.memory ?? true,
+			eval: raw.config?.eval ?? true,
+			judgeByDefault: raw.config?.judgeByDefault ?? false,
+		},
 	};
+}
+
+/** Clamp an optional model-provided integer into a safe range with a default. */
+function clampInt(
+	v: number | undefined,
+	min: number,
+	max: number,
+	fallback: number,
+): number {
+	if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+	return Math.min(max, Math.max(min, Math.round(v)));
 }

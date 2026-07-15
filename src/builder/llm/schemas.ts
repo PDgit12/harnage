@@ -97,6 +97,18 @@ export const PlanSchema = z.object({
 		.describe(
 			"ordered domain stages small local models execute, e.g. glob->count->read->report",
 		),
+	config: z
+		.object({
+			maxIterations: z.number().int().min(1).max(100).optional(),
+			memory: z.boolean().optional().describe("long-term memory on by default"),
+			eval: z.boolean().optional().describe("in-loop eval on by default"),
+			judgeByDefault: z
+				.boolean()
+				.optional()
+				.describe("run the LLM judge every run without HARNAGE_JUDGE=on"),
+		})
+		.optional()
+		.describe("bounded chassis knobs tuned to this agent's domain"),
 });
 export type LLMPlan = z.infer<typeof PlanSchema>;
 
