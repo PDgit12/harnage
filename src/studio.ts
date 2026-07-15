@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
 import type { BuildOptions } from "./builder";
 import { buildHarness } from "./builder";
-import { createProvider } from "./services/api/client";
+import { createBuildProvider } from "./services/api/client";
 import { resolveProvider } from "./services/api/resolve";
 
 /** Recursively list generated files (relative paths), skipping node_modules/.git. */
@@ -89,7 +89,7 @@ export async function studio(): Promise<void> {
 				.catch(() => false));
 		if (reachable) {
 			options = {
-				provider: createProvider(cfg),
+				provider: createBuildProvider(cfg),
 				ask: async (q, d) => {
 					const a = await ask(
 						`  ${chalk.cyan("?")} ${q} ${chalk.dim(`[${d}]`)} `,
