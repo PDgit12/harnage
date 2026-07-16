@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
-import { ENGINE_TEMPLATE } from "../src/builder/assemble/harness-templates";
+import {
+	ENGINE_TEMPLATE,
+	GENERATED_TUI,
+} from "../src/builder/assemble/harness-templates";
 import { toolTemplates } from "../src/builder/generate/tool-generator";
 
 const plan = { name: "demo", description: "demo harness" } as HarnessPlan;
@@ -32,6 +35,19 @@ describe("small-model loop hardening", () => {
 			"if (this.isSmallTalk(goal)) return this.runDecisionLoop(goal);",
 		);
 		expect(code).toContain("!this.isSmallTalk(goal)) {");
+		// capability questions count as small talk too
+		expect(code).toContain("what (can|do) (u|you) do");
+	});
+
+	it("pushes back on a final answer that promises future work", () => {
+		expect(code).toContain("intentNudged");
+		expect(code).toContain("You announced a next step instead of doing it");
+	});
+
+	it("slash menu has no busy gate in the generated TUI", () => {
+		const tui = GENERATED_TUI(plan);
+		expect(tui).toContain('const slashMatches = input.startsWith("/")');
+		expect(tui).not.toContain('input.startsWith("/") && !busy');
 	});
 });
 

@@ -186,12 +186,12 @@ export function App({ config, engine, branch, resumeState }: AppProps) {
 		[handleCommand, runGoal],
 	);
 
-	// Live slash-command menu: surface + highlight matching commands as you type "/".
+	// Live slash-command menu: surface + highlight matching commands as you type
+	// "/". Display-only, so no busy gate — typing "/" mid-run must still show it.
 	const slashQuery = input.trim().split(" ")[0];
-	const slashMatches =
-		input.startsWith("/") && !busy
-			? COMMANDS.filter((c) => c.name.startsWith(slashQuery)).slice(0, 7)
-			: [];
+	const slashMatches = input.startsWith("/")
+		? COMMANDS.filter((c) => c.name.startsWith(slashQuery)).slice(0, 7)
+		: [];
 
 	return (
 		<Box flexDirection="column">
