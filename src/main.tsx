@@ -375,32 +375,123 @@ program
 				/* no build brain — fall through to the offline keyword chassis */
 			}
 		}
-		console.log(
-			chalk.dim(`Building "${description}" — build brain: ${brainLabel}…`),
-		);
+		console.log();
+		console.log(chalk.bold(`  Building "${description}"`));
+		console.log(chalk.dim(`  build brain: ${brainLabel}`));
+		console.log();
+
+		// Stage-checklist progress: finished stages stay on screen with their
+		// duration; the live stage line redraws with a spinner + elapsed time so
+		// a multi-minute build never looks hung.
+		const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+		const t0 = Date.now();
+		let stage = "";
+		let message = "";
+		let stageStart = t0;
+		let frame = 0;
+		const fmt = (ms: number) =>
+			ms < 60_000
+				? `${Math.round(ms / 1000)}s`
+				: `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+		const drawLive = () => {
+			const spin = chalk.cyan(SPIN[frame++ % SPIN.length]);
+			process.stdout.write(
+				`\r  ${spin} ${chalk.bold(stage.padEnd(10))} ${chalk.dim(message)} ${chalk.dim(`(${fmt(Date.now() - stageStart)})`)}\x1b[K`,
+			);
+		};
+		const ticker = setInterval(() => {
+			if (stage) drawLive();
+		}, 120);
+		const onProgress = (p: { stage: string; message: string }) => {
+			if (p.stage !== stage) {
+				if (stage) {
+					process.stdout.write(
+						`\r  ${chalk.green("✓")} ${chalk.bold(stage.padEnd(10))} ${chalk.dim(`(${fmt(Date.now() - stageStart)})`)}\x1b[K\n`,
+					);
+				}
+				stage = p.stage;
+				stageStart = Date.now();
+			}
+			message = p.message;
+			drawLive();
+		};
+
 		const result = await buildHarness(
 			description,
 			opts.out,
-			(p) => {
-				process.stdout.write(
-					`\r  ${chalk.dim(p.stage.padEnd(10))} ${chalk.dim(p.message)}\x1b[K`,
-				);
-			},
+			onProgress,
 			options,
 		);
-		process.stdout.write("\r\x1b[K");
+		clearInterval(ticker);
+		if (stage) {
+			const mark = result.success ? chalk.green("✓") : chalk.red("✗");
+			process.stdout.write(
+				`\r  ${mark} ${chalk.bold(stage.padEnd(10))} ${chalk.dim(`(${fmt(Date.now() - stageStart)})`)}\x1b[K\n`,
+			);
+		}
+		console.log();
 		if (result.success) {
-			console.log(chalk.green.bold("✓ Harness built"));
+			console.log(
+				chalk.green.bold("  ✓ Harness built") +
+					chalk.dim(` in ${fmt(Date.now() - t0)}`) +
+					(result.repairs ? chalk.dim(` · ${result.repairs} auto-repair`) : ""),
+			);
+			await printBespokeSummary(result.outputDir);
 			console.log(`  ${chalk.bold("Output:")} ${result.outputDir}`);
 			console.log(
 				chalk.dim(`  cd ${result.outputDir} && bun install && bun start`),
 			);
 		} else {
-			console.log(chalk.red.bold("✗ Build failed"));
-			for (const e of result.errors) console.log(chalk.red(`  - ${e}`));
+			console.log(chalk.red.bold("  ✗ Build failed"));
+			for (const e of result.errors)
+				console.log(chalk.red(`  - ${e.split("\n")[0]}`));
 			process.exit(1);
 		}
 	});
+
+/** One-glance summary of what makes the generated harness bespoke. */
+async function printBespokeSummary(outputDir: string): Promise<void> {
+	try {
+		const { readdir } = await import("node:fs/promises");
+		const baseCommands = new Set([
+			"help.ts",
+			"clear.ts",
+			"model.ts",
+			"cost.ts",
+			"config.ts",
+			"doctor.ts",
+			"exit.ts",
+		]);
+		const commands = (await readdir(`${outputDir}/src/commands`))
+			.filter((f) => f.endsWith(".ts") && !baseCommands.has(f))
+			.map((f) => `/${f.replace(/\.ts$/, "")}`);
+		const skills = (await readdir(`${outputDir}/skills`))
+			.filter((f) => f.endsWith(".md") && f !== "verify-before-done.md")
+			.map((f) => f.replace(/\.md$/, ""));
+		const coreTools = new Set([
+			"BashTool",
+			"FileReadTool",
+			"FileEditTool",
+			"FileWriteTool",
+			"GlobTool",
+			"GrepTool",
+			"WebFetchTool",
+			"WebSearchTool",
+			"AgentTool",
+		]);
+		const customTools = (await readdir(`${outputDir}/src/tools`)).filter(
+			(d) => !d.endsWith(".ts") && !coreTools.has(d),
+		);
+		if (customTools.length)
+			console.log(`  ${chalk.bold("Custom tools:")} ${customTools.join(", ")}`);
+		if (commands.length)
+			console.log(`  ${chalk.bold("Commands:")} ${commands.join(" · ")}`);
+		if (skills.length)
+			console.log(`  ${chalk.bold("Skills:")} ${skills.join(" · ")}`);
+	} catch {
+		/* summary is cosmetic — never fail the build output over it */
+	}
+}
 
 process.on("unhandledRejection", (reason) => {
 	console.error(
