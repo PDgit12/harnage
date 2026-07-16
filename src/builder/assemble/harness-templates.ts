@@ -1353,8 +1353,8 @@ export class LoopEngine {
    * (field-tested: "hi" once ran a full changelog workflow and touched files). */
   private isSmallTalk(goal: string): boolean {
     const t = goal.trim().toLowerCase();
-    if (t.split(/\\s+/).length > 6) return false;
-    return /^(hi|hello|hey|yo|sup|hiya|howdy|thanks|thank you|ty|ok|okay|cool|nice|good (morning|afternoon|evening|night)|how are you|what'?s up|who are you|help)\\b[\\s!.?]*$/.test(t);
+    if (t.split(/\\s+/).length > 8) return false;
+    return /^(hi|hello|hey|yo|sup|hiya|howdy|thanks|thank you|ty|ok|okay|cool|nice|good (morning|afternoon|evening|night)|how are you|what'?s up|who are you|help|what (can|do) (u|you) do( then)?|what are (u|you)( for)?)\\b[\\s!.?]*$/.test(t);
   }
 
   private async runDecisionLoop(goal: string, stageInstruction?: string): Promise<string> {
@@ -1369,6 +1369,7 @@ export class LoopEngine {
     let toolsUsed = 0;
     let actNudged = false;
     let verifyChecked = false;
+    let intentNudged = false;
     // Circuit breaker for the #2 small-model loop failure: re-issuing the
     // exact same tool call after it already failed, forever.
     let lastCallSig = "";
@@ -1452,6 +1453,18 @@ export class LoopEngine {
           this.messages.push({ role: "user", content: listing
             ? \`The working directory actually contains these files: \${listing}. Do NOT assume a subdirectory like src/ — read paths relative to the current directory. If the item you called missing is in that list, read it and correct your answer; only conclude absence if it is truly not listed.\`
             : "Before finalizing: verify with a tool, reading paths relative to the current directory (do not assume a src/ prefix). Correct your answer if the item actually exists." });
+          continue;
+        }
+        // Final-with-intent: small models "finish" by ANNOUNCING the next step
+        // ("Next, I will extract commit messages...") instead of doing it.
+        // A final answer that promises future work gets pushed back once.
+        const promised = unwrapFinal(decision.answer ?? "");
+        if (!intentNudged && this.tools.length > 0 &&
+            /\\b(i (?:will|'ll) |next,? i (?:will|'ll)?|i am going to |proceed(?:ing)? (?:to|with) |then i (?:will|'ll) )/i.test(promised)) {
+          intentNudged = true;
+          this.onEvent?.({ type: "status", content: "holding model to its promised action" });
+          this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+          this.messages.push({ role: "user", content: "You announced a next step instead of doing it. Do NOT describe future work in a final answer — either perform the step now with a tool call, or give a final answer containing only completed results." });
           continue;
         }
         let answer = unwrapFinal(decision.answer ?? "");
@@ -1807,7 +1820,9 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   // Live slash-command menu: as soon as the input starts with "/", surface the
   // matching commands so they are discoverable and highlighted, Claude Code-style.
   const slashQuery = input.trim().split(" ")[0];
-  const slashMatches = input.startsWith("/") && !busy
+  // Display-only menu — no busy gate: typing "/" mid-run must still surface
+  // the command list (field-tested: the gate read as "slash menu is broken").
+  const slashMatches = input.startsWith("/")
     ? COMMANDS.filter((c) => c.name.startsWith(slashQuery)).slice(0, 6)
     : [];
 
