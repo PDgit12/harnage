@@ -546,14 +546,24 @@ const MAX_SAVED_MESSAGES = 200;
 export interface SessionState {
   messages: Array<Record<string, unknown>>;
   savedAt: string;
+  /** The goal of the run that last saved this session. */
+  goal?: string;
+  /** false while a run is in flight — a crash leaves it false, enabling
+   *  "resume unfinished task" on next startup. */
+  done?: boolean;
 }
 
-export async function saveSession(messages: Array<Record<string, unknown>>): Promise<void> {
+export async function saveSession(
+  messages: Array<Record<string, unknown>>,
+  meta?: { goal?: string; done?: boolean },
+): Promise<void> {
   try {
     await mkdir(SESSION_DIR, { recursive: true });
     const state: SessionState = {
       messages: messages.slice(-MAX_SAVED_MESSAGES),
       savedAt: new Date().toISOString(),
+      goal: meta?.goal,
+      done: meta?.done ?? true,
     };
     await writeFile(SESSION_PATH, JSON.stringify(state, null, 2));
   } catch { /* persistence is best-effort */ }
@@ -1032,6 +1042,9 @@ export class LoopEngine {
   private nudged = false;
   private escalated = false;
   private fallbackModel?: string;
+  // Goal of the in-flight run — saved with every session write so an
+  // interrupted run leaves a resumable {goal, done:false} marker on disk.
+  private activeGoal = "";
   // Long-term memory: on for top-level user sessions, off for sub-agents
   // (persistSession false) so spawned agents never pollute the durable store.
   private memory: MemoryStore | null = null;
@@ -1061,7 +1074,11 @@ export class LoopEngine {
   async run(goal: string): Promise<string> {
     const startedAt = Date.now();
     audit("run_start", { goal: goal.slice(0, 300), model: this.config.model, tier: this.profile.tier });
+    this.activeGoal = goal;
     this.messages.push({ role: "user", content: goal });
+    // Mark the session unfinished up front: a crash or kill mid-run leaves
+    // done=false on disk, so the next startup can offer to resume this goal.
+    if (this.persistSession) await saveSession(this.messages, { goal, done: false });
     // Retrieval gate (deterministic): pull matching long-term memory into the
     // transcript before the loop. Empty match = skip, no model call. Seeded as
     // the first message so every dispatch mode inherits it.
@@ -1101,6 +1118,7 @@ export class LoopEngine {
       } catch { /* eval is best-effort — never affect the returned answer */ }
     }
     audit("run_end", { model: this.config.model, chars: result.length, ms: Date.now() - startedAt });
+    if (this.persistSession) await saveSession(this.messages, { goal, done: true });
     return result;
   }
 
@@ -1266,7 +1284,7 @@ export class LoopEngine {
           });
           continue;
         }
-        if (this.persistSession) await saveSession(this.messages);
+        if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
         return fullText;
       }
       this.nudged = false;
@@ -1290,7 +1308,7 @@ export class LoopEngine {
         this.onEvent?.({ type: "tool_done", toolName: call.name });
       }
 
-      if (this.persistSession) await saveSession(this.messages);
+      if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
 
       // Claude Code loop semantics: tool results go back to the model and the
       // loop continues; the model signals completion by replying WITHOUT tool
@@ -1381,7 +1399,7 @@ export class LoopEngine {
           this.messages.push({ role: "user", content: DECISION_RULES });
           continue;
         }
-        if (this.persistSession) await saveSession(this.messages);
+        if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
         return unwrapFinal(raw.trim());
       }
       this.nudged = false;
@@ -1425,7 +1443,7 @@ export class LoopEngine {
           answer = await this.finalizeAnswer(goal, answer);
         }
         this.messages.push({ role: "assistant", content: answer });
-        if (this.persistSession) await saveSession(this.messages);
+        if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
         return answer;
       }
 
@@ -1451,7 +1469,7 @@ export class LoopEngine {
       }
       this.messages.push({ role: "user", content: \`Observation from \${name}:\\n\${compactToolOutput(output)}\` });
       this.onEvent?.({ type: "tool_done", toolName: name });
-      if (this.persistSession) await saveSession(this.messages);
+      if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
     }
   }
 
@@ -1580,7 +1598,7 @@ export const GENERATED_TUI = (
 	plan: HarnessPlan,
 ) => `import { Box, Static, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { COMMANDS, findCommand } from "./commands.ts";
 import { LoopEngine, type EngineConfig, type ProviderConfig } from "./engine.ts";
 import type { ModelProfile } from "./profiles.ts";
@@ -1600,6 +1618,10 @@ interface AppProps {
   skills: Skill[];
   profile: ModelProfile;
   initialMessages?: Array<Record<string, unknown>>;
+  /** Unfinished goal to continue automatically on mount (--resume). */
+  resumeGoal?: string;
+  /** Unfinished goal to mention when started without --resume. */
+  unfinishedHint?: string;
 }
 
 function toolLabel(name: string | undefined, input: unknown): string {
@@ -1622,13 +1644,17 @@ function permTarget(input: unknown): string {
 
 interface PermPrompt { tool: string; target: string; reason: string; resolve: (c: "allow" | "deny" | "always") => void; }
 
-export function App({ config, tools, skills, profile, initialMessages }: AppProps) {
+export function App({ config, tools, skills, profile, initialMessages, resumeGoal, unfinishedHint }: AppProps) {
   const { exit } = useApp();
-  const [history, setHistory] = useState<HistoryItem[]>([
-    { kind: "info", text: "⚙ ${plan.name} — " + config.type + " · " + config.model },
-    { kind: "info", text: "  scaffold: " + profile.tier + " tier · " + profile.loop + " loop · " + profile.toolCalling + " · " + profile.maxTools + " tools" },
-    { kind: "info", text: "  type a goal · / for commands · /help for the full list · esc to quit" },
-  ]);
+  const [history, setHistory] = useState<HistoryItem[]>(() => {
+    const lines: HistoryItem[] = [
+      { kind: "info", text: "⚙ ${plan.name} — " + config.type + " · " + config.model },
+      { kind: "info", text: "  scaffold: " + profile.tier + " tier · " + profile.loop + " loop · " + profile.toolCalling + " · " + profile.maxTools + " tools" },
+      { kind: "info", text: "  type a goal · / for commands · /help for the full list · esc to quit" },
+    ];
+    if (unfinishedHint) lines.push({ kind: "info", text: '  ⏸ unfinished task from last session: "' + unfinishedHint.slice(0, 100) + '" — restart with --resume to continue' });
+    return lines;
+  });
   const [input, setInput] = useState("");
   const [streamingText, setStreamingText] = useState("");
   const [activeTool, setActiveTool] = useState<string | null>(null);
@@ -1701,6 +1727,17 @@ export function App({ config, tools, skills, profile, initialMessages }: AppProp
     setBusy(false);
     busyRef.current = false;
   }, [config, tools, skills, profile, push]);
+
+  // Mid-task resume: --resume with an unfinished goal continues it on mount,
+  // the transcript (initialMessages) already holds every prior step.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumeGoal && !resumedRef.current) {
+      resumedRef.current = true;
+      push({ kind: "info", text: '⏵ resuming unfinished task: "' + resumeGoal.slice(0, 100) + '"' });
+      void runGoal("Continue the unfinished task from this transcript exactly where it left off: " + resumeGoal);
+    }
+  }, [resumeGoal, runGoal, push]);
 
   // Slash commands run through the harness's own command registry (commands.ts)
   // — the same set the classic REPL exposes — so the TUI is a first-class way to
