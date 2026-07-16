@@ -222,9 +222,13 @@ export async function verifyBuild(
 			stdout?: { toString(): string };
 			message?: string;
 		};
-		errors.push(
-			`TypeScript build failed: ${err.stderr?.toString() ?? err.stdout?.toString() ?? err.message}`,
-		);
+		// bun run prints the script line ("$ tsc --noEmit") to stderr while tsc
+		// emits its diagnostics on stdout — join both so the repair loop actually
+		// sees the type errors it must fix.
+		const detail = [err.stderr?.toString(), err.stdout?.toString()]
+			.filter((s): s is string => !!s?.trim())
+			.join("\n");
+		errors.push(`TypeScript build failed: ${detail || err.message}`);
 	}
 
 	return {
