@@ -1348,6 +1348,15 @@ export class LoopEngine {
 
   /** Mid/small: grammar-forced JSON dispatch, one tool per turn. Narration is
    * physically impossible under the decision schema — the #1 small-model failure. */
+  /** Deterministic small-talk detector: greetings and thanks must get a plain
+   * conversational reply — never the domain pipeline or a forced tool call
+   * (field-tested: "hi" once ran a full changelog workflow and touched files). */
+  private isSmallTalk(goal: string): boolean {
+    const t = goal.trim().toLowerCase();
+    if (t.split(/\\s+/).length > 6) return false;
+    return /^(hi|hello|hey|yo|sup|hiya|howdy|thanks|thank you|ty|ok|okay|cool|nice|good (morning|afternoon|evening|night)|how are you|what'?s up|who are you|help)\\b[\\s!.?]*$/.test(t);
+  }
+
   private async runDecisionLoop(goal: string, stageInstruction?: string): Promise<string> {
     let iteration = 0;
     const selected = selectTools(this.tools, goal, this.profile.maxTools);
@@ -1360,6 +1369,10 @@ export class LoopEngine {
     let toolsUsed = 0;
     let actNudged = false;
     let verifyChecked = false;
+    // Circuit breaker for the #2 small-model loop failure: re-issuing the
+    // exact same tool call after it already failed, forever.
+    let lastCallSig = "";
+    let sameCallCount = 0;
 
     // Ground small/mid models against real paths up front. Left to themselves
     // they assume a conventional src/ layout and read (or conclude absence on)
@@ -1384,9 +1397,13 @@ export class LoopEngine {
       const sys = await this.decisionSystem(goal, toolList, stageInstruction);
       const reqMessages = [{ role: "system", content: sys }, ...this.messages];
 
+      // Decision turns stream raw JSON — never surface it as agent text (the
+      // UI would render {"action":"tool",...} verbatim). The parsed decision
+      // is narrated via tool_use / final events instead.
+      this.onEvent?.({ type: "status", content: "deciding next step" });
       let raw = "";
       for await (const e of streamProvider(this.config, reqMessages, undefined, decode)) {
-        if (e.type === "text") { raw += e.content ?? ""; this.onEvent?.({ type: "text", content: e.content ?? "" }); }
+        if (e.type === "text") raw += e.content ?? "";
         if (e.type === "error") return \`Error: \${e.content}\`;
       }
 
@@ -1408,7 +1425,7 @@ export class LoopEngine {
         // Act-before-answer: a small model often answers from memory on turn 1
         // without ever calling a tool (its #1 task-following failure). If it
         // finalizes before touching a single tool, push back once.
-        if (toolsUsed === 0 && !actNudged && this.tools.length > 0) {
+        if (toolsUsed === 0 && !actNudged && this.tools.length > 0 && !this.isSmallTalk(goal)) {
           actNudged = true;
           this.onEvent?.({ type: "status", content: "pushing model to use a tool" });
           this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
@@ -1449,6 +1466,25 @@ export class LoopEngine {
 
       const name = decision.tool ?? "";
       const args = decision.args ?? {};
+
+      // Identical-call breaker: same tool + same args as the previous turn
+      // means the model is stuck. First repeat gets a corrective observation
+      // (no execution); a second repeat aborts the loop.
+      const callSig = name + "\\u0000" + JSON.stringify(args);
+      if (callSig === lastCallSig) {
+        sameCallCount++;
+        this.safety.recordFailure();
+        if (sameCallCount >= 2) {
+          return "Stopped: the model repeated the same failing tool call " + (sameCallCount + 1) + " times. Try rephrasing the goal.";
+        }
+        this.onEvent?.({ type: "status", content: "breaking a repeated tool call" });
+        this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+        this.messages.push({ role: "user", content: "You just issued the EXACT same tool call again. It was already executed — its result is above. Do something DIFFERENT: fix the arguments, pick another tool, or give your final answer from what you already know." });
+        continue;
+      }
+      lastCallSig = callSig;
+      sameCallCount = 0;
+
       toolsUsed++;
       this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
       this.onEvent?.({ type: "tool_use", toolName: name, toolInput: args });
@@ -1476,6 +1512,7 @@ export class LoopEngine {
   /** Mid tier: one constrained planning call produces a numbered step list,
    * seeded into the transcript, then the structured decision loop executes it. */
   private async runPlanAct(goal: string): Promise<string> {
+    if (this.isSmallTalk(goal)) return this.runDecisionLoop(goal);
     const toolNames = selectTools(this.tools, goal, this.profile.maxTools).map(t => t.name).join(", ");
     const planSys = [
       (await this.loadSystemPrompt()).slice(0, this.profile.systemPromptBudget),
@@ -1510,7 +1547,7 @@ export class LoopEngine {
    * at BUILD time (the builder knows the domain), so a 3B model doesn't have to
    * plan — it just fills the slots. Falls back to the decision loop if unbaked. */
   private async runPipeline(goal: string): Promise<string> {
-    if (PIPELINE.length) {
+    if (PIPELINE.length && !this.isSmallTalk(goal)) {
       const steps = PIPELINE
         .map((s, i) => \`\${i + 1}. \${s.instruction}\${s.tool ? \` (use the \${s.tool} tool)\` : ""}\`)
         .join("\\n");
