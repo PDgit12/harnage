@@ -38,7 +38,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .agentforge-build-*/
 *.config.json
 
+# harnage — local build output + config (contains API keys, session data)
+.harnage/
+.harnage-build-*/
+
 # compiled binary
+/harnage
 /agentforge
 
 # editor

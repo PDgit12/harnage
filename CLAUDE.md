@@ -1,4 +1,4 @@
-# AgentForge — CLAUDE.md
+# harnage — CLAUDE.md
 
 > **AI Model = Brain. Harness = Hands.**
 > Prompt-to-harness builder: anyone describes an agent harness → gets a fully-owned,
@@ -8,7 +8,7 @@
 ## Stack
 
 TypeScript 5 · Bun · Commander · Zod 4 · Vitest · Biome · chalk
-Entry: `src/main.tsx` (`agentforge` REPL | `agentforge --mcp` server)
+Entry: `src/main.tsx` (`harnage` REPL | `harnage --mcp` server)
 
 ## Verify (definition of done — all must pass, show output)
 
@@ -48,7 +48,7 @@ verify against code before acting), `AGENTS.md` (agent topology).
 - Never delete/force-push/hard-reset without explicit OK
 - Never commit secrets or API keys
 - Never resurrect deleted Rust code (`crates/` era is dead)
-- Never destructively touch `~/.agentforge` user config
+- Never destructively touch `~/.harnage` (and legacy ~/.agentforge) user config
 
 ## knitbrain pairing (mandatory workflow)
 
@@ -91,7 +91,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 knitbrain = BRAIN (memory/learnings/classify/code graph — sole owner) · Claude Code native
 subagents + knitbrain team board = MUSCLE (parallelism) · Claude Code = HANDS (execution,
 permissions, skill routing). ruflo/OpenHarness are **blueprints to mine, not dependencies**:
-hooks routing, vector memory, trust-gated agents, skills-as-markdown belong in AgentForge's
+hooks routing, vector memory, trust-gated agents, skills-as-markdown belong in harnage's
 generated harnesses. One owner per layer — filter for any new MCP addition.
 
 ## North star (from charter, 2026-07-12)

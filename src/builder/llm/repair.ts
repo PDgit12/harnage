@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 import type { Provider } from "../../services/api/client";
 import type { BuildResult } from "../assemble";
 import { verifyBuild } from "../assemble";
@@ -110,8 +110,14 @@ Rules: newContent is the ENTIRE file, not a diff. Only touch files shown above o
 		let applied = 0;
 		for (const p of patch.patches) {
 			if (!isInsideOutputDir(outputDir, p.path)) continue;
-			await writeFile(join(outputDir, p.path), p.newContent);
-			applied++;
+			try {
+				const target = join(outputDir, p.path);
+				await mkdir(dirname(target), { recursive: true });
+				await writeFile(target, p.newContent);
+				applied++;
+			} catch {
+				/* one unwritable patch must not kill the whole repair attempt */
+			}
 		}
 		if (applied === 0) break;
 
