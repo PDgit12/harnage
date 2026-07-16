@@ -107,61 +107,70 @@ Respond with ONLY a JSON object in that shape.`;
 	};
 
 	// --- Optional enrichment calls (best-effort; a failure just skips it) ---
+	// Independent and fired in PARALLEL: slow build brains (reasoning models like
+	// hy3 spend ~90s/call) would otherwise serialize 3 calls into minutes. Each
+	// helper swallows its own error so any one can fail without losing the others.
+	const toolSet = new Set(tools);
+	const baseCmds = new Set([
+		"help",
+		"clear",
+		"model",
+		"cost",
+		"config",
+		"doctor",
+		"exit",
+	]);
 
-	// Pipeline: ordered stages a SMALL local model can execute for the core task.
-	try {
-		const toolSet = new Set(tools);
-		const { pipeline } = await completeJSON(
-			provider,
-			`For the harness "${plan.description}", output 3-6 ordered stages a small local model executes to accomplish its core task (e.g. glob files -> read -> check -> report). Each stage: name, one-line instruction, optionally one tool from: ${tools.join(", ")}. Respond ONLY as JSON {"pipeline":[{"name","instruction","tool"?}]}.`,
-			PipelinePlanSchema,
-		);
-		const stages = pipeline.slice(0, 6).map((s) => ({
-			name: s.name,
-			instruction: s.instruction,
-			tool: s.tool && toolSet.has(s.tool) ? s.tool : undefined,
-		}));
-		if (stages.length) plan.pipeline = stages;
-	} catch {
-		/* no pipeline — engine falls back to the constrained-json decision loop */
-	}
-
-	// Bespoke slash commands.
-	try {
-		const baseCmds = new Set([
-			"help",
-			"clear",
-			"model",
-			"cost",
-			"config",
-			"doctor",
-			"exit",
-		]);
-		const { commands: raw } = await completeJSON(
-			provider,
-			`For the harness "${plan.description}", list up to 4 bespoke slash commands specific to its domain (NOT the base ones: help, clear, model, cost, config, doctor, exit). Each: name, description, behavior (prose). Respond ONLY as JSON {"commands":[{"name","description","behavior"}]}.`,
-			CommandsPlanSchema,
-		);
-		const custom = raw
-			.map((c) => ({ ...c, name: cmdId(c.name) }))
-			.filter((c) => c.name && !baseCmds.has(c.name));
-		if (custom.length) plan.customCommands = custom;
-	} catch {
-		/* no custom commands */
-	}
-
-	// Bespoke skills (procedural memory).
-	try {
-		const { skills } = await completeJSON(
-			provider,
-			`For the harness "${plan.description}", list up to 3 domain skills (procedural recipes teaching the agent how to do its core workflows). Each: name, trigger phrase, guidance (prose steps). Respond ONLY as JSON {"skills":[{"name","trigger","guidance"}]}.`,
-			SkillsPlanSchema,
-		);
-		const custom = skills.filter((s) => s.name && s.guidance);
-		if (custom.length) plan.customSkills = custom;
-	} catch {
-		/* no custom skills */
-	}
+	await Promise.all([
+		// Pipeline: ordered stages a SMALL local model can execute for the core task.
+		(async () => {
+			try {
+				const { pipeline } = await completeJSON(
+					provider,
+					`For the harness "${plan.description}", output 3-6 ordered stages a small local model executes to accomplish its core task (e.g. glob files -> read -> check -> report). Each stage: name, one-line instruction, optionally one tool from: ${tools.join(", ")}. Respond ONLY as JSON {"pipeline":[{"name","instruction","tool"?}]}.`,
+					PipelinePlanSchema,
+				);
+				const stages = pipeline.slice(0, 6).map((s) => ({
+					name: s.name,
+					instruction: s.instruction,
+					tool: s.tool && toolSet.has(s.tool) ? s.tool : undefined,
+				}));
+				if (stages.length) plan.pipeline = stages;
+			} catch {
+				/* no pipeline — engine falls back to the constrained-json decision loop */
+			}
+		})(),
+		// Bespoke slash commands.
+		(async () => {
+			try {
+				const { commands: raw } = await completeJSON(
+					provider,
+					`For the harness "${plan.description}", list up to 4 bespoke slash commands specific to its domain (NOT the base ones: help, clear, model, cost, config, doctor, exit). Each: name, description, behavior (prose). Respond ONLY as JSON {"commands":[{"name","description","behavior"}]}.`,
+					CommandsPlanSchema,
+				);
+				const custom = raw
+					.map((c) => ({ ...c, name: cmdId(c.name) }))
+					.filter((c) => c.name && !baseCmds.has(c.name));
+				if (custom.length) plan.customCommands = custom;
+			} catch {
+				/* no custom commands */
+			}
+		})(),
+		// Bespoke skills (procedural memory).
+		(async () => {
+			try {
+				const { skills } = await completeJSON(
+					provider,
+					`For the harness "${plan.description}", list up to 3 domain skills (procedural recipes teaching the agent how to do its core workflows). Each: name, trigger phrase, guidance (prose steps). Respond ONLY as JSON {"skills":[{"name","trigger","guidance"}]}.`,
+					SkillsPlanSchema,
+				);
+				const custom = skills.filter((s) => s.name && s.guidance);
+				if (custom.length) plan.customSkills = custom;
+			} catch {
+				/* no custom skills */
+			}
+		})(),
+	]);
 
 	return plan;
 }
