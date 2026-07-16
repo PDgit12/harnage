@@ -189,13 +189,19 @@ async function startTuiApp(resume: boolean): Promise<void> {
   const tools = await getAllTools();
   tools.push(makeAgentTool(tools, { tools, providerConfig: config, profile }));
   const skills = await loadSkills();
-  const initialMessages = resume ? (loadSession()?.messages ?? undefined) : undefined;
+  const session = loadSession();
+  const initialMessages = resume ? (session?.messages ?? undefined) : undefined;
+  const unfinishedGoal = session && session.done === false && session.goal ? session.goal : undefined;
+  // With --resume, continue the unfinished goal automatically; without it,
+  // just surface a hint so an interrupted task is never silently forgotten.
+  const resumeGoal = resume ? unfinishedGoal : undefined;
+  const unfinishedHint = !resume ? unfinishedGoal : undefined;
 
   const React = await import("react");
   const { render } = await import("ink");
   const { App } = await import("./ui.tsx");
   const { waitUntilExit } = render(
-    React.createElement(App, { config, tools, skills, initialMessages, profile }),
+    React.createElement(App, { config, tools, skills, initialMessages, profile, resumeGoal, unfinishedHint }),
   );
   await waitUntilExit();
   process.exit(0);
@@ -216,18 +222,37 @@ async function startRepl(resume = false): Promise<void> {
     if (skills.length) console.log(chalk.dim(\`Skills loaded: \${skills.map(s => s.name).join(", ")}\`));
 
     let initialMessages: Array<Record<string, unknown>> | undefined;
+    let resumeGoal: string | undefined;
     if (resume) {
       const session = loadSession();
       if (session) {
         initialMessages = session.messages;
         console.log(chalk.dim(\`Resumed session from \${session.savedAt} (\${session.messages.length} messages)\`));
+        if (session.done === false && session.goal) resumeGoal = session.goal;
       } else {
         console.log(chalk.dim("No saved session to resume."));
+      }
+    } else {
+      // Continuous-loop affordance: a run that crashed or was killed left
+      // done=false on disk — surface it instead of silently starting fresh.
+      const prev = loadSession();
+      if (prev && prev.done === false && prev.goal) {
+        console.log(chalk.yellow(\`Unfinished task from last session: "\${prev.goal.slice(0, 120)}" — restart with --resume to continue it.\`));
       }
     }
 
     const rl = createInterface({ input: stdIn, output: stdOut });
     rl.setPrompt(chalk.cyan("> "));
+
+    // Mid-task resume: the saved session ended with an unfinished goal, so
+    // continue it immediately — the transcript already holds all prior steps.
+    if (resumeGoal) {
+      console.log(chalk.yellow(\`Resuming unfinished task: "\${resumeGoal.slice(0, 120)}"\`));
+      const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
+      const result = await engine.run("Continue the unfinished task from this transcript exactly where it left off: " + resumeGoal);
+      initialMessages = engine.getMessages();
+      console.log(result);
+    }
     rl.prompt();
 
     rl.on("line", async (line: string) => {
