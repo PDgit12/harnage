@@ -44,7 +44,9 @@ export const BashTool = {
     return readOnlyCommands.some((cmd) => input.command.startsWith(cmd));
   },
   async call(input: { command: string; cwd?: string; timeout?: number }) {
-    const cwd = input.cwd ?? process.cwd();
+    // Small models emit cwd:"" or cwd:"." — treat anything blank as the
+    // process cwd instead of crashing execAsync with ENOENT.
+    const cwd = input.cwd?.trim() ? input.cwd : process.cwd();
     const timeout = input.timeout ?? 30000;
     const { stdout, stderr } =
       process.env.HARNAGE_SANDBOX === "docker"
