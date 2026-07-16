@@ -34,6 +34,19 @@ const CORE_EXAMPLE = `{
   "config": { "maxIterations": 20, "memory": true, "eval": true, "judgeByDefault": false }
 }`;
 
+const COMMANDS_EXAMPLE = `{
+  "commands": [
+    { "name": "review", "description": "Review the current PR diff for bugs and style issues", "behavior": "Run git diff against the base branch, read each changed file, and report findings as file:line comments." },
+    { "name": "severity", "description": "Re-rank open findings by severity", "behavior": "Re-read the last review output and sort findings into critical/major/minor buckets." }
+  ]
+}`;
+
+const SKILLS_EXAMPLE = `{
+  "skills": [
+    { "name": "diff-review", "trigger": "review this PR / check this diff", "guidance": "1. Run git diff to see changed lines. 2. Read each changed file for full context. 3. Check for bugs, security issues, and style deviations. 4. Report findings as file:line with a one-line fix suggestion." }
+  ]
+}`;
+
 /**
  * PLAN stage. Split into a small CORE call every build brain can handle, then
  * optional best-effort enrichment calls (pipeline, custom commands, custom
@@ -142,12 +155,23 @@ Respond with ONLY a JSON object in that shape.`;
 		})(),
 		// Bespoke slash commands.
 		(async () => {
+			const commandsPrompt = `For the harness "${plan.description}", list up to 4 bespoke slash commands specific to its domain (NOT the base ones: help, clear, model, cost, config, doctor, exit). Each: name, description, behavior (prose).
+Example output:
+${COMMANDS_EXAMPLE}
+Respond with ONLY a JSON object in that shape. The "commands" array must be non-empty — this harness's domain always supports at least one bespoke command.`;
 			try {
-				const { commands: raw } = await completeJSON(
+				let { commands: raw } = await completeJSON(
 					provider,
-					`For the harness "${plan.description}", list up to 4 bespoke slash commands specific to its domain (NOT the base ones: help, clear, model, cost, config, doctor, exit). Each: name, description, behavior (prose). Respond ONLY as JSON {"commands":[{"name","description","behavior"}]}.`,
+					commandsPrompt,
 					CommandsPlanSchema,
 				);
+				if (raw.length === 0) {
+					({ commands: raw } = await completeJSON(
+						provider,
+						`${commandsPrompt}\nYour previous answer returned an empty "commands" array — that is not acceptable. This harness is for the domain "${plan.description}". Name at least 1 concrete, domain-specific slash command it needs.`,
+						CommandsPlanSchema,
+					));
+				}
 				const custom = raw
 					.map((c) => ({ ...c, name: cmdId(c.name) }))
 					.filter((c) => c.name && !baseCmds.has(c.name));
@@ -158,13 +182,24 @@ Respond with ONLY a JSON object in that shape.`;
 		})(),
 		// Bespoke skills (procedural memory).
 		(async () => {
+			const skillsPrompt = `For the harness "${plan.description}", list up to 3 domain skills (procedural recipes teaching the agent how to do its core workflows). Each: name, trigger phrase, guidance (prose steps).
+Example output:
+${SKILLS_EXAMPLE}
+Respond with ONLY a JSON object in that shape. The "skills" array must be non-empty — this harness's domain always has at least one core workflow worth documenting.`;
 			try {
-				const { skills } = await completeJSON(
+				let { skills: raw } = await completeJSON(
 					provider,
-					`For the harness "${plan.description}", list up to 3 domain skills (procedural recipes teaching the agent how to do its core workflows). Each: name, trigger phrase, guidance (prose steps). Respond ONLY as JSON {"skills":[{"name","trigger","guidance"}]}.`,
+					skillsPrompt,
 					SkillsPlanSchema,
 				);
-				const custom = skills.filter((s) => s.name && s.guidance);
+				if (raw.length === 0) {
+					({ skills: raw } = await completeJSON(
+						provider,
+						`${skillsPrompt}\nYour previous answer returned an empty "skills" array — that is not acceptable. This harness is for the domain "${plan.description}". Name at least 1 concrete, domain-specific skill it needs.`,
+						SkillsPlanSchema,
+					));
+				}
+				const custom = raw.filter((s) => s.name && s.guidance);
 				if (custom.length) plan.customSkills = custom;
 			} catch {
 				/* no custom skills */
