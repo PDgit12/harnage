@@ -56,31 +56,35 @@ export async function runGenerate(
 	_context?: ProjectContext,
 ): Promise<GeneratedTool[]> {
 	const custom = spec.customTools ?? [];
-	const generated: GeneratedTool[] = [];
 
-	for (const tool of custom) {
-		const toolId = tool.name
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, "_")
-			.replace(/^_+|_+$/g, "")
-			.slice(0, 30);
-		if (!toolId) continue;
-		const pascal = pascalCase(toolId);
+	// Each tool is an independent LLM call — generate them in parallel so a slow
+	// build brain (reasoning models spend ~45s/call) doesn't serialize N tools
+	// into minutes. A single tool that fails all attempts throws and aborts the
+	// build (tools are load-bearing, unlike best-effort enrichment).
+	const results = await Promise.all(
+		custom.map(async (tool): Promise<GeneratedTool | null> => {
+			const toolId = tool.name
+				.toLowerCase()
+				.replace(/[^a-z0-9]+/g, "_")
+				.replace(/^_+|_+$/g, "")
+				.slice(0, 30);
+			if (!toolId) return null;
+			const pascal = pascalCase(toolId);
 
-		const schema = z.object({
-			code: z
-				.string()
-				.min(100)
-				.refine((c) => c.includes(`export const ${pascal}Tool`), {
-					message: `code must contain: export const ${pascal}Tool = { ... }`,
-				})
-				.refine((c) => c.includes('from "zod"'), {
-					message:
-						'code must import { z } from "zod" and define a zod inputSchema',
-				}),
-		});
+			const schema = z.object({
+				code: z
+					.string()
+					.min(100)
+					.refine((c) => c.includes(`export const ${pascal}Tool`), {
+						message: `code must contain: export const ${pascal}Tool = { ... }`,
+					})
+					.refine((c) => c.includes('from "zod"'), {
+						message:
+							'code must import { z } from "zod" and define a zod inputSchema',
+					}),
+			});
 
-		const prompt = `Write a complete TypeScript tool module for an AI agent harness.
+			const prompt = `Write a complete TypeScript tool module for an AI agent harness.
 
 Tool to implement:
 - id: "${toolId}"
@@ -98,15 +102,16 @@ Rules:
 
 Respond with ONLY JSON: {"code": "<the complete file content>"}`;
 
-		const result = await completeJSON(provider, prompt, schema);
-		generated.push({
-			toolId,
-			path: `tools/${pascal}Tool/${pascal}Tool.ts`,
-			code: result.code,
-		});
-	}
+			const result = await completeJSON(provider, prompt, schema);
+			return {
+				toolId,
+				path: `tools/${pascal}Tool/${pascal}Tool.ts`,
+				code: result.code,
+			};
+		}),
+	);
 
-	return generated;
+	return results.filter((t): t is GeneratedTool => t !== null);
 }
 
 export interface GeneratedCommand {
@@ -134,26 +139,29 @@ export async function runGenerateCommands(
 	commands: Array<{ name: string; description: string; behavior: string }>,
 	purpose: string,
 ): Promise<GeneratedCommand[]> {
-	const generated: GeneratedCommand[] = [];
-	for (const cmd of commands) {
-		const id = cmd.name
-			.toLowerCase()
-			.replace(/^\//, "")
-			.replace(/[^a-z0-9]+/g, "_")
-			.replace(/^_+|_+$/g, "")
-			.slice(0, 30);
-		if (!id) continue;
+	// Independent per-command LLM calls, run in parallel — same reason as
+	// runGenerate: sequential generation on a slow build brain blows the time
+	// budget. A command that fails all attempts throws and aborts the build.
+	const results = await Promise.all(
+		commands.map(async (cmd): Promise<GeneratedCommand | null> => {
+			const id = cmd.name
+				.toLowerCase()
+				.replace(/^\//, "")
+				.replace(/[^a-z0-9]+/g, "_")
+				.replace(/^_+|_+$/g, "")
+				.slice(0, 30);
+			if (!id) return null;
 
-		const schema = z.object({
-			code: z
-				.string()
-				.min(60)
-				.refine((c) => /export\s+async\s+function\s+call\s*\(/.test(c), {
-					message: "code must export: async function call(args, context)",
-				}),
-		});
+			const schema = z.object({
+				code: z
+					.string()
+					.min(60)
+					.refine((c) => /export\s+async\s+function\s+call\s*\(/.test(c), {
+						message: "code must export: async function call(args, context)",
+					}),
+			});
 
-		const prompt = `Write a complete TypeScript slash-command module for an AI agent harness.
+			const prompt = `Write a complete TypeScript slash-command module for an AI agent harness.
 
 Command: "/${id}"
 - purpose: ${cmd.description}
@@ -172,13 +180,14 @@ Rules:
 
 Respond with ONLY JSON: {"code": "<the complete file content>"}`;
 
-		const result = await completeJSON(provider, prompt, schema);
-		generated.push({
-			id,
-			description: cmd.description,
-			path: `commands/${id}.ts`,
-			code: result.code,
-		});
-	}
-	return generated;
+			const result = await completeJSON(provider, prompt, schema);
+			return {
+				id,
+				description: cmd.description,
+				path: `commands/${id}.ts`,
+				code: result.code,
+			};
+		}),
+	);
+	return results.filter((c): c is GeneratedCommand => c !== null);
 }
