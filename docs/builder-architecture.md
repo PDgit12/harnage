@@ -1,79 +1,107 @@
-# LLM-Driven Builder — Architecture (researched 2026-07-12)
+# LLM-Driven Builder — Architecture (as-built)
 
-> Replaces keyword `parseIntent` with an LLM pipeline. Synthesis of Lovable, Emergent,
-> bolt.diy, OpenHarness (HKUDS), ruflo (ruvnet) — mapped to prompt-to-harness.
+> Originally researched 2026-07-12 as a replacement for keyword `parseIntent` (synthesis of
+> Lovable, Emergent, bolt.diy, OpenHarness, ruflo). The pipeline below is now implemented and
+> live in `src/builder/`; this doc has been updated from "proposed" to "as-built" — every stage
+> cites the file that runs it. See [design.md](../design.md) for how the builder fits the rest
+> of the system (two-brain architecture, model profiles, memory/eval).
 
-## What the leaders actually do
+## Design thesis (why this shape)
 
-| Platform | Pipeline | Key lesson for us |
-|---|---|---|
-| **Lovable** | Agent mode default: chat → autonomous research/debug/generate → live preview → auto-deploy | Interface (chat + agent autonomy) IS the product; agent researches and self-debugs |
-| **Emergent** | 5 specialized agents: Planner (prompt→structured requirements) → Developer → Testing (screenshot analysis + conflict review) → Deploy → Optimize | Multi-agent split by phase; autonomous debugging loop (detect→analyze→fix, no human) |
-| **bolt.diy** (open source) | Sandboxed env where agent owns fs/npm/dev-server/console: generate → run → read errors → fix. 15+ starter templates. 19+ providers incl. Ollama via AI SDK | **Verify-repair loop is the core**, not one-shot generation. Templates as starting points. Multi-provider from day one |
-| **OpenHarness** | Harness = Tools + Knowledge + Observation + Action + Permissions. Skills-as-markdown, permission modes, compaction | Component checklist for what a generated harness must contain |
-| **ruflo** | Hooks-based semantic routing, vector memory, trust-gated agents, background workers | Features generated harnesses should ship with (differentiators) |
+1. **Hybrid, not full-LLM.** Lovable/bolt LLM-generate everything — works great with frontier
+   models, flaky with local ones. harnage's thesis is local-model efficiency: a deterministic
+   chassis (already-verified template code, `src/builder/assemble/harness-templates.ts`) plus LLM
+   generation only for the custom surface (tools, commands, system prompt, domain
+   pipeline/skills). Smaller generation surface = smaller model succeeds.
+2. **Verify-repair loop is the core**, not one-shot generation (bolt.diy pattern) —
+   `src/builder/llm/repair.ts::repairLoop`.
+3. **Provider-agnostic.** The same `Provider` interface (Anthropic/OpenAI/Ollama/OpenRouter)
+   drives every builder stage; Ollama is the thesis demo.
+4. **Structured output enforcement everywhere.** Every LLM call goes through `completeJSON()`
+   (`src/builder/llm/client.ts`) against a Zod schema; malformed output gets re-prompted.
+5. **Keyword `parseIntent` is the offline fallback**, not deleted — used when `buildHarness()` is
+   called without a `provider` (`src/builder/index.ts:234-238`).
 
-Cross-cutting best practice (2026): spec-first — LLM asks clarifying questions until
-requirements/edge cases are pinned, THEN plans, THEN codes. Never one-shot from vague prompt.
-Security review is a dedicated pass; no model catches its own security mistakes.
-
-## AgentForge pipeline (v2 — replaces `parseIntent`)
+## The pipeline (`buildHarness()`, `src/builder/index.ts`)
 
 ```
 prompt
   │
   ▼
-1. INTERVIEW (LLM)        clarifying Qs until spec pinned (skippable: --yes uses defaults)
-  │                        output: StructuredSpec — Zod-validated JSON, retry ≤3 on invalid
+1. INTERVIEW  (src/builder/llm/interview.ts::runInterview)
+  │   LLM asks ≤3 clarifying questions (skipped if request is already specific enough);
+  │   answered via the `ask` callback (interactive /init) or their own default answers.
+  │   Output: LLMSpec — Zod-validated (SpecSchema).
   ▼
-2. PLAN (LLM)             spec → HarnessPlan: tools, commands, providers, custom files,
-  │                        system prompt, permission policy. Zod-validated, user-approvable
+2. PLAN  (src/builder/llm/plan.ts::runLLMPlan)
+  │   a. CORE call: name, description, tools, commands, systemPrompt, config
+  │      (one JSON object sized for a weak local build brain to nail in one shot)
+  │   b. enrichment, fired in PARALLEL (independent calls, best-effort):
+  │        - pipeline stages (≤6, for the small-model fixed-pipeline loop mode)
+  │        - customCommands (≤4 bespoke slash commands)
+  │        - customSkills (≤3 procedural-memory recipes)
+  │      An empty-array enrichment response gets one bounded retry before being
+  │      accepted as "none" (plan.ts:168-173, 195-200) — a weak model's first answer
+  │      is sometimes an empty list it will fill in on a second, more insistent ask.
+  │   Deterministic post-processing enforces invariants the model can't be trusted
+  │   with: tool allowlist intersection, name sanitization, command id normalization.
   ▼
-3. SCAFFOLD (deterministic) proven chassis from templates: loop engine, provider layer,
-  │                        tool interface, sandbox, persistence, MCP dual-mode
+3. GENERATE  (src/builder/llm/generate.ts)
+  │   runGenerate(): real TS modules for spec.customTools, one LLM call per tool, in
+  │      parallel. A tool that never validates against its schema throws and aborts
+  │      the build — generated tools are load-bearing, not best-effort.
+  │   runGenerateCommands(): same pattern for plan.customCommands.
   ▼
-4. GENERATE (LLM)         only the custom ~20%: bespoke tools, commands, system prompt,
-  │                        domain knowledge/skills — per-file, schema-constrained output
+4. ASSEMBLE  (src/builder/assemble/index.ts::assembleAndVerify — deterministic, no LLM)
+  │   Writes package.json/tsconfig/main.tsx/Tool.ts/tools.ts/commands.ts/provider.ts
+  │   plus every harness subsystem template: profiles.ts (ModelProfile), pipeline.ts,
+  │   engine.ts, compaction.ts, memory.ts, eval.ts, trace.ts, permissions.ts, skills.ts,
+  │   session.ts, subagent.ts, ui.tsx — from harness-templates.ts. LLM-GENERATE-stage
+  │   files (step 3) are merged in, path-confined to the output src/ dir.
   ▼
-5. VERIFY-REPAIR (loop)   bun install + tsc --noEmit + vitest in output dir;
-  │                        errors fed back to LLM, ≤N repair iterations (bolt.diy pattern)
+5. VERIFY  (assembleAndVerify → verifyBuild: bun install + bun run typecheck)
   ▼
-6. REVIEW (LLM)           quality + security pass over generated custom code
+6. REPAIR  (src/builder/llm/repair.ts::repairLoop, ≤ options.maxRepairs, default 2)
+      Feeds tsc errors + the implicated file contents (path-safety enforced, capped at
+      ~12KB to fit small-model context windows) back to the LLM; applies full-file
+      patches; re-verifies. Gives up cleanly (keeps last-good state) if a repair
+      attempt produces no valid patch.
   ▼
-owned harness (compiles, tests green, user's code entirely)
+owned harness (compiles; user's generated code, not a copy of harnage)
 ```
 
-## Design decisions
+No `REVIEW` stage (a proposed quality/security pass over generated code) is implemented — see
+Gaps.
 
-1. **Hybrid, not full-LLM.** Lovable/bolt LLM-generate everything — works with frontier
-   models, flaky with local ones. Our thesis is local-model efficiency: deterministic
-   chassis (already-verified template code) + LLM for the custom surface. Smaller
-   generation surface = smaller model succeeds = thesis proven.
-2. **Reuse LoopEngine for the builder itself.** The builder is a goal-driven agent task:
-   goal = "generate harness matching spec, all gates green". Verify-repair = existing
-   verifying→adapting phases. Dogfood.
-3. **Provider-agnostic via existing `Provider` interface.** Anthropic/OpenAI/Ollama/
-   OpenRouter all drive the builder. Ollama path = the demo that proves the thesis.
-4. **Structured output enforcement.** Every LLM stage returns JSON validated by Zod;
-   malformed → re-prompt with the validation error, ≤3 attempts (closes design.md gap
-   "no structured output enforcement").
-5. **Keyword `parseIntent` demoted to fallback** for offline/no-provider mode, not deleted.
+## What generated harnesses actually contain (verified checklist)
 
-## What generated harnesses must contain (parity checklist)
+Confirmed by `assembleAndVerify`'s write list: `LoopEngine`-equivalent `engine.ts` with
+`ModelProfile` resolution, 9-tool-equivalent `tools.ts`, permissions (modes + path rules),
+sandboxed bash, MCP dual-mode (`main.tsx`), slash commands (`commands.ts` + any LLM-generated
+custom ones), skills-as-markdown (`skills/`), session persistence + resume (`session.ts`), cost
+tracking (baked into `engine.ts`/`trace.ts`), context compaction (`compaction.ts`), four-tier
+memory (`memory.ts`), eval-in-loop (`eval.ts`), local audit trail + `trace` command
+(`trace.ts`). Ink TUI (`ui.tsx`) ships by default (not gated behind a spec flag).
 
-Loop engine · ≥N tools · permissions (modes + path rules) · sandboxed bash ·
-MCP dual-mode · slash commands · skills-as-markdown dir · persistence/resume ·
-cost tracking · context compaction. TUI optional per spec.
+## Model-aware packing (`src/builder/index.ts:242-336`)
 
-## Implementation order
+If the spec includes `ollama`, the builder probes `localhost:11434/api/tags` then `/api/show`
+per candidate model (filters out embedders/vision models, requires `capabilities: ["tools"]` —
+tool-calling is a hard requirement, not best-effort). Interactive mode offers a curated menu from
+`recommendModels()` (`src/builder/models/catalog.ts`); non-interactive mode auto-picks the
+largest installed model that fits `maxParamsForRam()`. The chosen model's `catalogOverrides()`
+are baked into `profiles.ts` as `plan.modelProfileOverrides`.
 
-1. `src/builder/llm/` — `interview.ts`, `plan.ts` (LLM stages, Zod schemas, retry wrapper)
-2. Wire into `buildHarness()`: interview→plan→scaffold(existing assemble)→generate→verify-repair
-3. Repair loop: feed tsc/vitest stderr back, cap iterations, keep last-good
-4. Review pass + parity checklist assertion
-5. Benchmark: same prompt via Ollama local vs Anthropic — both must produce green harness
+## Gaps vs. the original research plan
 
-## Sources
+- **No dedicated REVIEW/security pass.** The original design called for a quality+security LLM
+  pass over generated custom code before shipping; this stage does not exist — repair only fixes
+  compile errors, not security issues in generated tool/command code.
+- **No template-parity assertion.** "Parity checklist" from the original doc is enforced by
+  `assembleAndVerify` always writing the full template set, not by an explicit runtime check that
+  a generated harness matches the checklist.
+
+## Sources (original research)
 
 - https://muz.li/blog/lovable-for-designers-the-complete-guide-to-building-apps-with-ai-2026/
 - https://www.ml6.eu/en/blog/the-anatomy-of-a-lovable-app-and-its-boundaries-in-enterprise-software
