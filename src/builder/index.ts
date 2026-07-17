@@ -67,6 +67,21 @@ export interface BuildOptions {
 	maxRepairs?: number;
 }
 
+/**
+ * Description flows verbatim into generated source (program.description(...),
+ * the TUI banner) — strip characters that could break or inject into those
+ * string/template literals. name is already sanitized to [a-z0-9-] above;
+ * description just needs the same defusing, not the same charset.
+ */
+function sanitizeDescription(s: string): string {
+	return s
+		.replace(/`/g, "'")
+		.replace(/"/g, "'")
+		.replace(/\$\{/g, "")
+		.replace(/[\r\n\u2028\u2029]+/g, " ")
+		.trim();
+}
+
 export function generatePlan(spec: StructuredSpec): HarnessPlan {
 	const commands: string[] = [];
 	const providers: string[] = [];
@@ -91,7 +106,7 @@ export function generatePlan(spec: StructuredSpec): HarnessPlan {
 
 	return {
 		name,
-		description: spec.purpose.slice(0, 80),
+		description: sanitizeDescription(spec.purpose).slice(0, 80),
 		tools: spec.tools,
 		commands: [...new Set(commands)],
 		providers,
