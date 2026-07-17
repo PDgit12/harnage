@@ -9,6 +9,7 @@ import type { HarnessPlan } from "../index";
 
 export const HARNESS_PROFILES = (
 	overrides: Record<string, unknown> = {},
+	harnessName = "harness",
 ) => `// ModelProfile — per-model scaffold adaptation (Engine v3). Resolves the
 // plugged-in model to a profile that reconfigures the whole engine: dispatch
 // mode, tool exposure, decoding discipline, and loop structure. This is what
@@ -16,6 +17,9 @@ export const HARNESS_PROFILES = (
 // around the brain. Frontier models get a free native-tool loop; small local
 // models get grammar-forced JSON dispatch + a tight tool budget + structure,
 // so narration-instead-of-acting becomes physically impossible.
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type Tier = "frontier" | "strong" | "mid" | "small";
 export type LoopMode = "free" | "plan-act" | "pipeline";
@@ -74,11 +78,29 @@ function resolveBase(model: string, contextTokens = 8192): ModelProfile {
 // tool-caller earns the free loop). Empty unless a catalog model was picked.
 const BAKED_OVERRIDES: Record<string, Partial<ModelProfile>> = ${JSON.stringify(overrides)};
 
-/** Resolve a model to its profile, then merge any baked per-model curation. */
+// Measured per-model profile written by the \`calibrate\` command
+// (~/.${harnessName}/profile.json) — a live bench-battery result, so it
+// outranks build-time guesses. Fail-safe: any read/parse/shape error is
+// swallowed and resolveProfile falls back to base+baked unchanged.
+function readCalibration(model: string): Partial<ModelProfile> | undefined {
+  try {
+    const p = join(homedir(), ".${harnessName}", "profile.json");
+    if (!existsSync(p)) return undefined;
+    const data = JSON.parse(readFileSync(p, "utf-8"));
+    if (data.model !== model || typeof data.profile !== "object" || data.profile === null) return undefined;
+    return data.profile as Partial<ModelProfile>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve a model to its profile: measured calibration > baked curation > size-tier base. */
 export function resolveProfile(model: string, contextTokens = 8192): ModelProfile {
   const base = resolveBase(model, contextTokens);
   const ov = BAKED_OVERRIDES[model.toLowerCase()];
-  return ov ? { ...base, ...ov } : base;
+  const merged = ov ? { ...base, ...ov } : base;
+  const measured = readCalibration(model);
+  return measured ? { ...merged, ...measured } : merged;
 }
 `;
 
