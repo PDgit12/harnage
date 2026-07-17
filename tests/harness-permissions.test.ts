@@ -60,3 +60,66 @@ describe("generated permissions — remember flow", () => {
 		).toBe(false);
 	});
 });
+
+// audit #3: single "*" must stay within a path segment; only "**" crosses "/".
+describe("generated permissions — glob segment semantics", () => {
+	it("single * does not match across '/'", () => {
+		const policy = {
+			mode: "default",
+			rules: [{ pattern: "file_write(src/*)", allow: true }],
+		};
+		expect(
+			P.checkPermission(policy, "file_write", { path: "src/x.ts" }).allowed,
+		).toBe(true);
+		// escaping deeper must NOT be granted by a single-star rule
+		expect(
+			P.checkPermission(policy, "file_write", { path: "src/deep/x.ts" })
+				.allowed,
+		).toBe(false);
+	});
+
+	it("** matches across segments", () => {
+		const policy = {
+			mode: "default",
+			rules: [{ pattern: "file_write(src/**)", allow: true }],
+		};
+		expect(
+			P.checkPermission(policy, "file_write", { path: "src/deep/x.ts" })
+				.allowed,
+		).toBe(true);
+	});
+});
+
+// audit #4: a bash wildcard grant must not be widened by shell chaining.
+describe("generated permissions — bash chaining guard", () => {
+	const policy = {
+		mode: "default",
+		rules: [{ pattern: "bash(git *)", allow: true }],
+	};
+
+	it("allows a simple command that matches the grant", () => {
+		expect(
+			P.checkPermission(policy, "bash", { command: "git status" }).allowed,
+		).toBe(true);
+		// bash args may contain '/', unlike path globs
+		expect(
+			P.checkPermission(policy, "bash", { command: "git commit -m a/b" })
+				.allowed,
+		).toBe(true);
+	});
+
+	it("refuses a chained/redirected command through the wildcard", () => {
+		for (const command of [
+			"git status; rm -rf ~",
+			"git status && rm -rf ~",
+			"git status | sh",
+			"git log > /etc/passwd",
+			"git $(rm -rf ~)",
+		]) {
+			expect(
+				P.checkPermission(policy, "bash", { command }).allowed,
+				command,
+			).toBe(false);
+		}
+	});
+});
