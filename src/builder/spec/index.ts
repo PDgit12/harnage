@@ -167,7 +167,7 @@ export function parseIntent(
 	const model: "ollama" | "anthropic" | "openai" = "ollama";
 
 	const shortName = prompt.replace(/[.,!?;:].*$/, "").trim();
-	const _name =
+	const name =
 		shortName
 			.toLowerCase()
 			.replace(/\s+/g, "-")
@@ -175,7 +175,7 @@ export function parseIntent(
 			.slice(0, 40) || "agent-harness";
 
 	return {
-		name: shortName,
+		name,
 		purpose: prompt.split(/\.|\n/)[0]?.trim() ?? prompt,
 		language: language.length > 0 ? language : ["typescript"],
 		tools: [...tools],

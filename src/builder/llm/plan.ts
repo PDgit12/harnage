@@ -110,7 +110,7 @@ Respond with ONLY a JSON object in that shape.`;
 
 	const plan: HarnessPlan = {
 		name,
-		description: core.description.slice(0, 80),
+		description: sanitizeDescription(core.description).slice(0, 80),
 		tools,
 		commands,
 		providers,
@@ -208,6 +208,21 @@ Respond with ONLY a JSON object in that shape. The "skills" array must be non-em
 	]);
 
 	return plan;
+}
+
+/**
+ * Description flows verbatim into generated source (program.description(...),
+ * the TUI banner) — strip characters that could break or inject into those
+ * string/template literals. Mirrors the name sanitizer above, but doesn't
+ * need to restrict to [a-z0-9-] since it's not an identifier.
+ */
+function sanitizeDescription(s: string): string {
+	return s
+		.replace(/`/g, "'")
+		.replace(/"/g, "'")
+		.replace(/\$\{/g, "")
+		.replace(/[\r\n\u2028\u2029]+/g, " ")
+		.trim();
 }
 
 function cmdId(n: string): string {
