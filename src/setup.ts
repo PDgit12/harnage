@@ -42,28 +42,34 @@ export async function setupWizard(): Promise<ProviderConfig> {
 		"3": "ollama",
 		"4": "openrouter",
 	};
-	const type = providerMap[providerChoice.trim()] ?? "ollama";
+	const type = providerMap[providerChoice.trim()];
+	if (!type) {
+		console.log(chalk.yellow(`  Unrecognized choice, defaulting to Ollama.`));
+	}
+	const resolvedType = type ?? "ollama";
 
 	const config: ProviderConfig = {
-		type,
-		model: DEFAULT_MODELS[type] ?? "llama3",
-		maxTokens: type === "ollama" ? 4096 : 8192,
+		type: resolvedType,
+		model: DEFAULT_MODELS[resolvedType] ?? "llama3",
+		maxTokens: resolvedType === "ollama" ? 4096 : 8192,
 	};
 
-	if (type === "ollama") {
+	if (resolvedType === "ollama") {
 		config.baseUrl = "http://localhost:11434";
-	} else if (type === "openrouter") {
+	} else if (resolvedType === "openrouter") {
 		config.baseUrl = "https://openrouter.ai/api/v1";
 	}
 
 	const rl2 = createInterface({ input, output });
 
-	if (type !== "ollama") {
-		const apiKey = await rl2.question(chalk.dim(`API key for ${type}: `));
+	if (resolvedType !== "ollama") {
+		const apiKey = await rl2.question(
+			chalk.dim(`API key for ${resolvedType}: `),
+		);
 		if (apiKey.trim()) config.apiKey = apiKey.trim();
 	}
 
-	if (type === "ollama" || type === "openrouter") {
+	if (resolvedType === "ollama" || resolvedType === "openrouter") {
 		const baseUrl = await rl2.question(
 			chalk.dim(`Base URL [${config.baseUrl}]: `),
 		);
