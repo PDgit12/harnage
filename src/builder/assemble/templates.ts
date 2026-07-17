@@ -454,6 +454,7 @@ export const COMMANDS: Command[] = [
   { type: "local", name: "/model", description: "Switch or view current model", load: () => import("./commands/model.ts") },
   { type: "local", name: "/config", description: "Configure provider", load: () => import("./commands/config.ts") },
   { type: "local", name: "/exit", description: "Exit the CLI", load: () => import("./commands/exit.ts") },
+  { type: "local", name: "/calibrate", description: "Measure this model and pick its best loop/edit-format", load: () => import("./commands/calibrate.ts") },
 ${custom}
 ];
 
