@@ -1,309 +1,305 @@
-# AgentForge — Architecture
+# harnage — Architecture
 
-> **AI Model = Brain. Harness = Hands.** `agentforge --mcp` for MCP server mode.
+> **AI Model = Brain. Harness = Hands.** `harnage` for the TUI, `harnage --mcp` for MCP server mode.
+> Two brains in this system: the **build brain** (LLM driving `/init`'s interview→plan→generate→
+> repair pipeline) and the **runtime brain** (whatever model the generated harness plugs in,
+> reconfigured per-model by `ModelProfile`). This repo is both the reference harness (dogfoods its
+> own engine) and the builder that generates new ones.
 
 ---
 
 ## Overview
 
 ```
-main.tsx
+main.tsx (Commander)
   ├── --mcp flag → MCP server (tools, resources, prompts via SDK)
-  └── default    → Ink REPL
-         ├── <StoreProvider> + <ThemeProvider>
-         │     └── <REPL>
-         │           ├── <Banner>
-         │           ├── <Messages>       ← virtualized message list
-         │           │     └── <StreamingMarkdown>
-         │           ├── <Spinner>
-         │           ├── <ToolCall>       ← live tool status
-         │           ├── <PromptInput>    ← auto-complete for /commands
-         │           ├── <StatusLine>     ← model, cost, MCP count, tasks
-         │           └── <Dialogs>
-         │                 ├── <PermissionDialog>
-         │                 ├── <CostThreshold>
-         │                 └── <ExitFlow>
-         └── LoopEngine (AsyncGenerator)
+  └── default    → Ink TUI (src/ui/index.tsx + App.tsx), falls back to classic readline REPL (src/repl.ts)
+         ├── App(config, engine, branch, resumeState)
+         │     ├── <Static> history (user/agent/tool/error/info lines)
+         │     ├── streaming text box, active-tool line, live "/command" menu
+         │     └── framed ❯ input (ink-text-input)
+         └── LoopEngine (AsyncGenerator<StreamEvent>)
                └── Provider (Anthropic | OpenAI | Ollama | OpenRouter)
 ```
 
-Two entry modes declared via Commander: `agentforge` (REPL) or `agentforge --mcp`.
+Verified: `src/main.tsx:286` names the CLI `harnage`; `src/ui/index.tsx` renders the Ink `App`
+and falls back per `--classic`/piped stdin; `src/ui/App.tsx` has no `StoreProvider`/`ThemeProvider`/
+dialog components — those are not implemented (see Gaps).
 
 ---
 
-## Architecture
+## Two-brain architecture
 
-```
-┌─────────────────────────────────────────────┐
-│              LoopEngine                      │
-│  planning → executing → verifying →        │
-│  checking_goal → (adapting on failure) → done/failed
-├─────────────────────────────────────────────┤
-│  SafetyRails │ ContextManager │ ToolParser  │
-├─────────────────────────────────────────────┤
-│  Anthropic │ OpenAI │ Ollama │ OpenRouter   │
-└─────────────────────────────────────────────┘
-```
+**Build brain** — `src/builder/llm/*`, invoked only during `/init` (or `buildHarness()` with a
+`provider` option). Writes a harness once; not part of the generated harness's runtime.
 
-## Current Modules
+**Runtime brain** — whatever provider/model the *generated* harness is configured with. The
+generated `profiles.ts` resolves that model to a `ModelProfile` (tier, loop mode, tool-calling
+mode, tool budget, edit format, prompt budget, decoding params) so the same chassis behaves
+differently for a frontier model vs. a 3B local model. See "Engine v3 / ModelProfile" below.
 
-| Module | Purpose |
-|--------|---------|
-| `loop/` | Goal-driven loop engine — `LoopEngine.ts` (`run`/`resume`/`getState`), `types.ts` defines `LoopPhase` state machine, `safety.ts` enforces rails, `context.ts` compaction/summarization, `sandbox.ts` bash sandbox, `persistence.ts` loop state |
-| `services/api/providers/` | LLM providers: Anthropic, OpenAI, Ollama, OpenRouter (each its own class implementing `Provider`) |
-| `tools/` | 9 tools including BashTool sandboxed via `runSandboxed` from `loop/sandbox.ts` |
-| `ui/` | Ink + React TUI — `App.tsx` (framed ❯ input, streaming, tool lines, mode line), `index.tsx` launcher |
-| `permissions.ts` / `skills.ts` | Path-rule policy (`~/.agentforge/permissions.json`) · skills-as-markdown (`./skills/`) |
-| `builder/` | Description-to-harness code generator |
-| `builder/llm/` | LLM pipeline: interview → plan → generate → repair (Zod-validated JSON at every stage) |
+This repo's own `src/loop/LoopEngine.ts` is the reference implementation both brains are modeled on.
 
 ---
 
-## REPL & UI
+## LoopEngine (reference harness)
 
-Two frontends over the same `LoopEngine` stream:
-
-**Ink TUI** (default on TTY) — `src/ui/App.tsx` + `src/ui/index.tsx`:
-- Framed `❯` input box (round border), streaming agent text, `↳ tool` status lines
-- `⏵⏵ ready/working` mode line with right-aligned `branch · model · $cost`
-- `/command` dispatch via `findCommand`, `esc` quits, `--resume` replays interrupted loop
-- History via Ink `<Static>`; live area re-renders only current turn
-
-**Classic readline REPL** (`src/repl.ts`, `--classic` flag or piped stdin):
-- chalk-styled streaming, spinner, tool labels, `/command` completion
-- Same permission policy, skills injection, and `--resume` support
-
-Both load the permission policy (`src/permissions.ts`) and skills (`src/skills.ts`)
-at startup. No theme system or dialog overlays yet — permission denials surface as
-tool results the model adapts to; interactive permission prompts are a known gap.
-
----
-
-## LoopEngine
-
-THE query engine. Goal-driven agent loop (not a generic LLM caller) — persists messages as conversation context and orchestrates tool execution turns across a state machine. `QueryEngine.ts` is legacy and being deleted; `useStreaming` is typed to `LoopEngine`.
-
-State machine phases (`LoopPhase`): `planning → executing → verifying → checking_goal → adapting → done | failed`.
+Goal-driven agent loop — state machine, not a bare LLM caller. `src/loop/types.ts` defines
+`LoopPhase`: `planning → executing → verifying → checking_goal → adapting → done | failed`.
 
 ```
 run(goal) → AsyncGenerator<StreamEvent>
-  loop until done/failed or safety rails trip:
-    planning     → provider.stream(messages, toolDefs); collect text + tool_uses
-    executing    → for each tool_use: checkPermissions → tool.call → append result
-    verifying    → provider checks tool results for errors
-    checking_goal → provider answers YES/NO; YES → done, NO → adapting
-    adapting     → re-plan with failure context, then executing again
+  planning      → provider.stream(messages, toolDefs); collect text + tool_uses
+  executing     → for each tool_use: checkPermissions → tool.call → append result
+  verifying     → provider checks tool results for errors
+  checking_goal → provider answers YES/NO; YES → done, NO → adapting
+  adapting      → re-plan with failure context, then executing again
 
-resume(state)  → restart the loop from a persisted LoopState
-getState()     → returns the current LoopState (messages, toolResults, phase)
+resume(state) → AsyncGenerator<StreamEvent>   (restart from a persisted LoopState — src/loop/LoopEngine.ts:94)
+getState()    → current LoopState (messages, toolResults, phase)
 ```
 
-Defaults: `maxIterations = 25`, `maxTimeMs = 300_000`. `StreamEvent` types: `text`, `tool_use`, `tool_result`, `thinking`, `error`, `done`.
+`src/loop/persistence.ts` snapshots `LoopState` to disk; `recoverLastLoop()` is read at TUI
+launch (`src/ui/index.tsx:45`) and handed to `App` as `resumeState`, which `App.tsx:127-137`
+auto-resumes via `engine.resume(resumeState)` on mount — mid-task resume after a crash or
+interrupted run, not just a fresh session replay.
 
-**`useStreaming.ts`** — React hook wrapping the engine. Consumes the `AsyncGenerator` and produces React state: `streamingText`, `thinkingText`, `toolUses`, `isDone`, `isStreaming`, `error`. Supports cancellation via `cancelRef`.
+`src/loop/safety.ts` enforces rails (max iterations, max wall time); `src/loop/context.ts` does
+compaction/summarization; `src/loop/sandbox.ts` runs Bash via `Bun.spawn` with a command/path
+blocklist (application-level only — no OS container).
 
 ---
 
-## Tool System
+## Tool system
 
-Each tool defines (via `Tool` interface in `src/Tool.ts`):
+9 tools, lazily loaded via `getAllTools()` (`src/tools.ts`): Bash (sandboxed), FileRead, FileEdit,
+FileWrite, Glob, Grep, WebFetch, WebSearch, Agent (spawns a sub-agent — same `LoopEngine`, fresh
+transcript, restricted tool set).
 
-```
-name, description, inputSchema (Zod),
-call(input, context) → ToolResult,
-validateInput?, checkPermissions?, isReadOnly?
-```
-
-9 tools, lazily loaded via `getAllTools()`:
-
-| Tool | Purpose |
-|------|---------|
-| `BashTool` | Shell execution (sandboxed via `runSandboxed`) |
-| `FileReadTool` | Read files (text, images, PDFs) |
-| `FileEditTool` | String-replacement edits |
-| `FileWriteTool` | Create/overwrite files |
-| `GlobTool` | File pattern matching |
-| `GrepTool` | Regex content search |
-| `WebFetchTool` | Fetch URL content |
-| `WebSearchTool` | Web search |
-| `AgentTool` | Spawn sub-agent |
-
-**Permissions:** `PermissionContext` with modes `default` (prompt), `plan` (ask once), `bypass` (auto-approve), `auto` (auto-approve).
-
-`ToolContext`: `{ cwd, env, permissions, sandbox }`.
+Permissions (`src/permissions.ts`): `PermissionContext` modes `default | plan | auto | bypass`,
+plus path-glob `rules` (`"bash(bun *)"` → allow/deny) loaded from `~/.harnage/permissions.json`.
+No policy file present → defaults to `bypass` (current reference-harness behavior); writing a
+policy file is how a user opts in to enforcement.
 
 ---
 
-## Provider System
+## Provider system
 
-`createProvider(config)` in `src/services/api/client.ts` selects provider by `config.type`. Each provider implements `Provider.stream(messages, tools?) → AsyncGenerator<StreamEvent>`.
+`createProvider(config)` in `src/services/api/client.ts` selects by `config.type`. Each provider
+implements `Provider.stream(messages, tools?) → AsyncGenerator<StreamEvent>`.
 
-| Provider | File | SDK / Transport |
-|----------|------|-----------------|
-| `anthropic` | `AnthropicProvider.ts` | `@anthropic-ai/sdk` |
-| `openai` | `OpenAIProvider.ts` | `openai` |
-| `openrouter` | `OpenRouterProvider.ts` | `openai` (custom `baseUrl`, own class) |
-| `ollama` | `OllamaProvider.ts` | plain fetch |
+| Provider | File |
+|----------|------|
+| `anthropic` | `src/services/api/providers/AnthropicProvider.ts` |
+| `openai` | `src/services/api/providers/OpenAIProvider.ts` |
+| `openrouter` | `src/services/api/providers/OpenRouterProvider.ts` |
+| `ollama` | `src/services/api/providers/OllamaProvider.ts` (plain fetch, no SDK) |
 
-**OpenRouter:** `OpenRouterProvider` is a dedicated class (not a re-cast OpenAI provider). Free models available via the `:free` suffix (e.g., `mistralai/mixtral-8x22b-instruct:free`).
-
-**Provider resolution** (`main.tsx`): checks `~/.agentforge/config.json` → `ANTHROPIC_API_KEY` env → `OPENAI_API_KEY` env → Ollama local discovery → `SetupWizard` interactive prompt.
-
----
-
-## State System
-
-`createStore(initial, onChange?)` — lightweight pub/sub store, no external deps.
-
-```
-getState() → T
-setState(updater: Partial<T> | ((prev) => Partial<T>))
-subscribe(listener) → unsubscribe
-```
-
-**`StoreProvider`** — React context wrapper. `useAppState(selector)` reads a slice, `useSetAppState()` returns stable setter.
-
-**`AppState`:**
-```
-settings: UserSettings { theme, model, provider, maxTokens, costCeilingUsd, permissionMode }
-messages: Message[]
-streamingText (plain Text for perf, not StreamingMarkdown), streamingToolUses
-toolPermissionContext, costState (tokens + USD), notifications, theme
-```
-
-**Side effects** (`onChangeAppState`): debounced persist of messages + settings to `~/.agentforge/state.json` and `~/.agentforge/settings.json`.
-
-Selectors: `getActiveToolCalls`, `getCurrentCost`, `getNotificationCount`, `getLastUserMessage`.
+`FallbackProvider` (`src/services/api/client.ts:58`) wraps a chain for automatic failover.
 
 ---
 
-## Slash Commands
+## Builder — LLM-driven pipeline
 
-8 commands, registered in REPL. All use `local` (string return, in-process handler).
-
-| Command | Type | Description |
-|---------|------|-------------|
-| `/cost` | local | Show token usage and cost |
-| `/doctor` | local | System diagnostics screen |
-| `/help` | local | Available commands |
-| `/clear` | local | Clear conversation |
-| `/model` | local | Switch/view model |
-| `/init` | local | Generate a new harness from description |
-| `/config` | local | Configure provider (API key, model) |
-| `/exit` | local | Exit CLI |
-
-Dispatch: `/exit/quit`, `/clear`, `/init` handled directly in REPL. All others routed through `findCommand()` from `commands.ts` → lazy-load handler → call with args.
-
-Dispatch: `findCommand` parses `/name args`, matches against registry, loads handler, calls with context.
-
----
-
-## Builder Module
-
-Description-to-harness generator. Takes a user description and generates a complete `agentforge`-style project.
+`buildHarness(prompt, cwd?, onProgress?, options)` in `src/builder/index.ts`:
 
 ```
-buildHarness(prompt, cwd?, onProgress?)
-  → parseIntent(prompt)     → StructuredSpec
-  → generatePlan(spec)      → HarnessPlan { files, tools, commands, providers, ... }
-  → assembleAndVerify(plan) → BuildResult { success, outputDir, errors }
+1. INTERVIEW (LLM, src/builder/llm/interview.ts::runInterview)
+     clarifying questions (≤3, ready:false → ask via `ask` callback or use defaults)
+     → validated LLMSpec (Zod: SpecSchema)
+2. PLAN (LLM, src/builder/llm/plan.ts::runLLMPlan)
+     a. CORE call  → name, description, tools, commands, systemPrompt, config
+        (one small JSON object every build brain — even a weak local model — can produce)
+     b. enrichment calls, fired in PARALLEL, each best-effort (failure just skips it):
+        - pipeline stages (small-model tier fixed pipeline, ≤6 stages)
+        - customCommands (≤4 bespoke slash commands)
+        - customSkills (≤3 procedural-memory recipes)
+        empty-array enrichment responses get one bounded retry (src/builder/llm/plan.ts:168,195)
+3. GENERATE (LLM, src/builder/llm/generate.ts)
+     runGenerate() writes real TS modules for spec.customTools (in parallel; a tool that
+     never validates aborts the build — tools are load-bearing, not best-effort)
+     runGenerateCommands() writes real TS modules for plan.customCommands
+4. ASSEMBLE (deterministic, src/builder/assemble/index.ts::assembleAndVerify)
+     writes package.json/tsconfig/main.tsx/Tool.ts/tools.ts/commands.ts/provider.ts,
+     plus harness subsystems from src/builder/assemble/harness-templates.ts:
+     profiles.ts, pipeline.ts, engine.ts, compaction.ts, memory.ts, eval.ts, trace.ts,
+     permissions.ts, skills.ts, session.ts, subagent.ts, ui.tsx (Ink TUI)
+5. VERIFY (verifyBuild: bun install + bun run typecheck)
+6. REPAIR (LLM, src/builder/llm/repair.ts::repairLoop, ≤ options.maxRepairs, default 2)
+     feeds tsc errors + implicated file contents back to the LLM, applies full-file
+     patches (path-confined to outputDir), re-verifies; gives up cleanly if a repair
+     attempt produces no valid patch
 ```
 
-- **`parseIntent`** — keyword-matching intent parser (language, tools, commands, models, security, features).
-- **`generatePlan`** — builds file map, tool/command lists, system prompt, theme, verification steps.
-- **`assembleAndVerify`** — writes generated files (`package.json`, `tsconfig.json`, `vitest.config.ts`, `src/main.tsx`, `src/Tool.ts`, `src/tools.ts`, `src/commands.ts`, `src/context.ts`, `src/services/provider.ts`, `src/state/AppState.ts`), then runs `bun install` + `tsc --noEmit`. Modular generators in `src/builder/generate/`: `tool-generator.ts`, `command-generator.ts`, `provider-generator.ts`, `ui-generator.ts`.
+No `provider` option (offline) → falls back to keyword `parseIntent` + deterministic
+`generatePlan` (`src/builder/index.ts:70-106`), skipping stages 1-3 and 6.
 
-`/init` invokes this flow from the REPL.
-
----
-
-## Cost Tracking
-
-`CostTracker` class in `src/cost-tracker.ts`:
-
-- Per-session: `promptTokens`, `completionTokens`, `cost`, `startTime`
-- Cumulative: `allTimeCost`, `allTimeTokens`
-- Model pricing table: `claude-sonnet-5`, `claude-3-haiku`, `gpt-4o`, `gpt-4o-mini`, `ollama` (free)
-- `recordUsage(model, prompt, completion)` → computes cost, updates counters
-- `checkBudget(ceilingUsd)` → returns `{ withinBudget, percentUsed }`
-- Cost displayed in `StatusLine` and `CostThreshold` dialog
+Local-model packing: if the spec includes `ollama`, `buildHarness` probes
+`localhost:11434/api/tags` + `/api/show` (capability check for `tools`), then either asks
+the user to pick from `recommendModels()` (interactive) or auto-picks the largest installed
+model that fits `maxParamsForRam()` (non-interactive). The chosen model's `catalogOverrides()`
+(`src/builder/models/catalog.ts`) are baked into `profiles.ts` as per-model tuning on top of
+the size-tier default.
 
 ---
 
-## MCP Integration
+## Model catalog & tiers (`src/builder/models/catalog.ts`)
 
-Two modes:
+Two layers: (1) a curated shortlist of proven local tool-callers (Qwen-heavy — `CATALOG` array,
+each entry with `id`, `params`, `ramGb`, `domains`, optional `profileOverrides`); (2)
+family/size inference (`classifyDomain`, `maxParamsForRam`) for any model not in the shortlist —
+recommend-not-restrict, nothing is excluded.
 
-**AgentForge AS MCP server** (`--mcp` flag):
-- Exposes all 9 tools via `ListToolsRequestSchema` / `CallToolRequestSchema`
-- Resources: project files (top 50), `.agentforge/config.json`, `state.json`
-- Prompts: `system-prompt` template, `generate-harness` config generator
-- Transport: stdio via `StdioServerTransport`
-
-**AgentForge CONSUMING MCP servers**:
-- `McpClientManager` — connects to external MCP servers (stdio or Streamable HTTP)
-- `McpTool` — wraps external MCP tools as internal `Tool` instances
-- Config resolution: `src/services/mcp/config.ts`
-- Connected servers listed in `StatusLine`
+`recommendModels(domain, ramGb, installedNames)` ranks the shortlist for a work type
+(`code | data | docs | review | general`) and RAM budget, marking `[installed]` vs.
+`[run: ollama pull <id>]`.
 
 ---
 
-## Persistence
+## Engine v3 / ModelProfile (generated harness, `HARNESS_PROFILES` template)
 
-```
-~/.agentforge/
-├── config.json     ← Provider configuration
-├── state.json      ← Messages (last 100) + theme
-└── settings.json   ← Theme, model preferences
+Every generated harness ships a `profiles.ts` that resolves the configured model to a
+`ModelProfile` at runtime (`src/builder/assemble/harness-templates.ts:10-70`):
+
+```ts
+interface ModelProfile {
+  tier: "frontier" | "strong" | "mid" | "small";
+  loop: "free" | "plan-act" | "pipeline";
+  toolCalling: "native" | "constrained-json";
+  maxTools: number;
+  editFormat: "search-replace" | "whole-file";
+  systemPromptBudget: number;
+  temperature: number;
+  repeatPenalty?: number;
+  nudge: boolean;
+  contextTokens: number;
+}
 ```
 
-Debounced writes (2s timer) via `onChangeAppState`. State survives restarts.
+`resolveBase(model)` matches, in order: frontier hosted models (claude/gpt-4+/o1/o3/gemini) →
+free native-tool loop; ≥13B local → free native-tool loop; ≤3.5B (or phi/tinyllama/gemma:2b/
+llama3.2) → fixed `pipeline` loop + `constrained-json` dispatch + 4-tool budget; else (7-8B,
+unknown) → `plan-act` + `constrained-json`. Per-model `profileOverrides` from the catalog are
+merged on top. The builder's PLAN stage bakes the domain-specific `pipeline` stages
+(`plan.pipeline`, ≤6 steps) that the `pipeline` loop mode executes — a 3B model fills slots in a
+build-time-known pipeline instead of free-loop reasoning about tool choice.
 
 ---
 
-## Local Model Deployment
+## Memory (generated harness, `HARNESS_MEMORY` + related templates)
 
-### Ollama
+Four tiers, matching the market taxonomy:
 
-Ollama serves models locally via its HTTP API (`localhost:11434`); it manages CUDA/MPS/ROCm. No GPU orchestration code in AgentForge.
+- **Semantic** (durable facts) + **episodic** (dated events) — local `bun:sqlite` at
+  `~/.<name>/memory.db` (`src/memory.ts`, class `MemoryStore`). `saveFact`/`saveEvent` write;
+  `recall(query)` is a **deterministic keyword-overlap retrieval gate** — an empty match IS the
+  decision to skip retrieval, so no model call is ever spent on that meta-decision. Disabled via
+  `HARNAGE_MEMORY=off`; off for sub-agents (`persistSession` gate).
+- **Procedural** — the skills system (`skills/*.md`, `HARNESS_SKILLS` + `plan.customSkills`
+  rendered by `assembleAndVerify`).
+- **Working** — context compaction (`HARNESS_COMPACTION` → `src/compaction.ts`): summarizes
+  older messages into one system note once `estimateTokens()` exceeds a threshold, keeping the
+  most recent `keepRecent` messages verbatim.
 
-**`src/services/api/providers/OllamaProvider.ts`** — plain `fetch` to `POST /api/chat` with OpenAI-compatible message format:
-- Streaming via `ReadableStream` body reader (SSE lines `{"message":{"content":"..."}}`)
-- Tool calling via OpenAI-format tool definitions in the request body
-- `num_ctx` passed per-request via `options` (default 2048). No dynamic windowing — Ollama silently truncates if context exceeds the model limit.
-- Token counts/metrics come from Ollama's response.
+Nothing leaves the machine — documented in the generated `SECURITY.md`.
 
-### Sandbox
+---
 
-`runSandboxed(command, config?)` in `src/loop/sandbox.ts` — used by `BashTool` (`Bun.spawn`, `AbortSignal.timeout`, pipe-only I/O). Enforces:
-- Blocked commands: `rm`, `dd`, `mkfs`, `reboot`, `shutdown`, `halt`
-- Blocked write paths: `/`, `/etc`, `/usr`, `/bin`, `/boot`, `/dev`
-- Network commands blocked unless `allowNetwork` (`curl`, `wget`, `ssh`, `scp`, ...)
-- `maxCpuTimeMs` (default 10 000), `maxOutputSize` (default 1 000 000)
+## Eval-in-loop (generated harness, `HARNESS_EVAL` → `src/eval.ts`)
 
-`SandboxConfig` is the extension path for richer policy (allow-list, custom paths).
+`runDeterministicEvals(goal, answer, messages, toolCount)` — cheap, no model call: non-empty
+answer, didn't stop on error, isn't a raw JSON/blob dump, used a tool when tools were available.
+Opt-in LLM-as-judge (`HARNAGE_JUDGE=on`) via `judgeRequest`/`parseJudgeScore` scores 1-5. Results
+log to the audit trail; `trace.ts` (`HARNESS_TRACE`) summarizes runs/latency/tool calls/eval
+pass rate via a generated `trace` command — terminal-first LLMops, no external service.
+
+---
+
+## Session persistence & resume (generated harness, `HARNESS_SESSION`)
+
+`saveSession(messages, {goal, done})` / `loadSession()` at `~/.<name>/session.json` (last 200
+messages). `done: false` on save means a run was in flight when it last saved — the generated
+`main.tsx --resume` path (mirrors the reference harness's `recoverLastLoop`) can detect and
+offer to continue an unfinished task, not just replay history.
+
+---
+
+## Permission system (generated harness, `HARNESS_PERMISSIONS`)
+
+Same shape as the reference harness's `src/permissions.ts`, generated per-project: modes
+`default | plan | auto | bypass`, path-glob rules in `~/.<name>/permissions.json`, `checkPermission`
+matches tool name + a `targetOf(input)` extraction (path/file_path/command/url/pattern) against
+rule patterns.
+
+---
+
+## Reference-harness TUI vs. generated-harness TUI
+
+Both use Ink 5 + React 18 + `ink-text-input`. Reference: `src/ui/App.tsx` (277 lines) — no theme
+system, no dialog overlays; permission denials surface as tool results the model adapts to.
+Generated: `GENERATED_TUI` template in `harness-templates.ts` (same shape, baked with the plan's
+name/model/commands).
+
+---
+
+## Command-center orchestration
+
+Not code in this repo — a Claude Code *skill* (`command-center`) for turning a session into an
+orchestrator that spawns real Claude Code sessions in tmux (one per workstream, its own git
+worktree), prompts/monitors/collects their reports. Used to run the multi-worker docs/build/qa
+split this repo's own development uses; not part of the `harnage` runtime.
+
+---
+
+## Cost tracking
+
+`CostTracker` (`src/cost-tracker.ts`): per-session `promptTokens`/`completionTokens`/`cost`,
+cumulative `allTimeCost`/`allTimeTokens`, per-model pricing table, `recordUsage()`,
+`checkBudget(ceilingUsd)`.
+
+---
+
+## MCP integration
+
+Dual-mode: `harnage --mcp` exposes the 9 tools + resources (project files, config, state) +
+prompts via `StdioServerTransport` (`src/main.tsx`). Consuming side: `McpClientManager`
+(`src/services/mcp/`) connects to external MCP servers (stdio or Streamable HTTP) and wraps
+their tools as internal `Tool` instances.
+
+---
+
+## Persistence layout
+
+```
+~/.harnage/
+├── config.json       ← provider configuration
+├── permissions.json  ← permission policy (absent = bypass)
+├── state.json        ← messages + settings (debounced writes)
+```
+
+Generated harnesses mirror this under `~/.<name>/` plus `memory.db` and `session.json`.
 
 ---
 
 ## Gaps
 
-Remaining for full Claude Code-level capability (updated 2026-07-13):
-
-- **Interactive permission prompts**: default policy mode auto-denies unmatched writes; a TUI dialog to approve/deny per call (and remember the rule) is missing in both reference and generated harnesses.
-- **Web-based dashboard**: no visual interface for monitoring runs or state.
-- **Sandbox depth**: command/policy-level only; container isolation (Docker/Firecracker) needed for untrusted code.
-- **Competitor benchmark**: no measured comparison against Claude Code / Codex CLI / OpenCode yet.
-
-Resolved since the last revision: multi-agent (AgentTool + generated subagent.ts), structured output enforcement (builder `completeJSON` with Zod re-prompting), Ink TUI (reference + generated), context compaction, path-rule permissions, skills, session resume.
+- **Interactive permission prompts**: no TUI dialog to approve/deny a denied call and remember
+  the rule, in either reference or generated harnesses — denials surface as tool-result text.
+- **Sandbox depth**: command/path blocklist only; no OS-level container (Docker/gVisor) for
+  untrusted code execution.
+- **Memory recall**: exact-substring keyword match, no stemming (e.g. "games" won't match a
+  stored "game").
+- **Competitor benchmark**: `scripts/bench-*.ts` exist for internal profile tuning; no published
+  head-to-head vs. Claude Code / Codex CLI / OpenCode yet.
 
 ---
 
 ## Dependencies
 
 ```
-react 18.3.1     ink ^5.2.1       yoga-layout-prebuilt
-commander ^15    chalk ^5.6.2     zod ^4.4.3
+react ^18        ink ^5.2.1       ink-text-input   yoga-layout (ink dependency)
+commander ^15    chalk ^5.6.2     zod ^4
 @anthropic-ai/sdk  openai          @modelcontextprotocol/sdk
-marked (streaming markdown)  glob  vitest ^4.1
-biome (linting)  typescript ^5
+bun:sqlite (built-in, generated-harness memory)
+vitest ^4        biome (lint)     typescript ^5
 ```
