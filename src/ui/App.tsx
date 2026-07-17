@@ -20,6 +20,10 @@ interface AppProps {
 	engine: LoopEngine;
 	branch?: string;
 	resumeState?: import("../loop/types").LoopState;
+	/** Unfinished goal from last session to mention when started without --resume. */
+	unfinishedHint?: string;
+	/** --resume was passed but no interrupted loop was found. */
+	noResumeFound?: boolean;
 }
 
 function toolLabel(name: string | undefined, input: unknown): string {
@@ -36,7 +40,14 @@ function toolLabel(name: string | undefined, input: unknown): string {
 	return preview ? `${n} · ${preview.slice(0, 80)}` : n;
 }
 
-export function App({ config, engine, branch, resumeState }: AppProps) {
+export function App({
+	config,
+	engine,
+	branch,
+	resumeState,
+	unfinishedHint,
+	noResumeFound,
+}: AppProps) {
 	const { exit } = useApp();
 	const [history, setHistory] = useState<HistoryItem[]>([
 		{ kind: "info", text: `⚙ harnage — ${config.type} · ${config.model}` },
@@ -44,6 +55,17 @@ export function App({ config, engine, branch, resumeState }: AppProps) {
 			kind: "info",
 			text: "  /init  build a harness   ·   /help  all commands   ·   or type a goal to run the agent",
 		},
+		...(unfinishedHint
+			? [
+					{
+						kind: "info" as const,
+						text: `  ⏸ unfinished task from last session: "${unfinishedHint.slice(0, 100)}" — restart with --resume to continue`,
+					},
+				]
+			: []),
+		...(noResumeFound
+			? [{ kind: "info" as const, text: "  No interrupted loop to resume." }]
+			: []),
 	]);
 	const [input, setInput] = useState("");
 	const [streamingText, setStreamingText] = useState("");
