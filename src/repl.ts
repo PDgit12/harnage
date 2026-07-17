@@ -98,10 +98,16 @@ export async function repl(
 
 	const engine = await initEngine(config, allTools, toolContext);
 
+	const { recoverLastLoop } = await import("./loop/persistence");
+	const lastState = await recoverLastLoop();
+	const unfinished =
+		lastState && lastState.phase !== "done" && lastState.phase !== "failed"
+			? lastState
+			: null;
+
 	if (resume) {
-		const { recoverLastLoop } = await import("./loop/persistence");
-		const state = await recoverLastLoop();
-		if (state) {
+		if (unfinished) {
+			const state = unfinished;
 			console.log(
 				chalk.dim(
 					`Resuming loop "${state.goal?.slice(0, 60) ?? "?"}" (iteration ${state.iteration})...`,
@@ -131,6 +137,12 @@ export async function repl(
 		} else {
 			console.log(chalk.dim("No interrupted loop to resume."));
 		}
+	} else if (unfinished) {
+		console.log(
+			chalk.dim(
+				`⏸ unfinished task from last session: "${unfinished.goal?.slice(0, 100) ?? "?"}" — restart with --resume to continue`,
+			),
+		);
 	}
 
 	const completer = (line: string): [string[], string] => {
