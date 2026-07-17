@@ -37,7 +37,7 @@ All eight are implemented in `src/builder/assemble/harness-templates.ts` (`HARNE
 `ENGINE_TEMPLATE`) and shipped in every generated harness's `profiles.ts`/`engine.ts`.
 
 ### L1. Constrained decoding for tool calls — `toolCalling: "constrained-json"`
-`DECISION_SCHEMA` (harness-templates.ts:765) is a grammar-forced JSON schema
+`DECISION_SCHEMA` (harness-templates.ts:808) is a grammar-forced JSON schema
 (`{action:"tool"|"final", tool?, args?, answer?}`) passed as Ollama's `format` param on decision
 turns (`engine.ts` decision-loop path, `format: DECISION_SCHEMA` at the streamProvider call site).
 Native tool-call path (`this.profile.toolCalling === "native"`) is kept for models strong at it
