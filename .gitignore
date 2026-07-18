@@ -53,3 +53,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 docs/autonomous-workflow.md
 docs/hermes-watchtower.md
 .claude/settings.local.json
+
+# per-worker orchestration identity (worktree-local)
+CLAUDE.local.md
+
+# internal — never public (personal instructions, agent defs, orchestration, learnings)
+CLAUDE.md
+.claude/
+.claude-flow/

@@ -1,5 +1,15 @@
 import type { HarnessPlan } from "../index";
 
+/**
+ * Belt-and-braces escape for a value embedded inside a nested backtick
+ * template literal in GENERATED source (e.g. the banner in showBanner()).
+ * The plan builders already sanitize `description`, but this defends the
+ * interpolation site itself against any value that reaches it unsanitized.
+ */
+function escapeForTemplateLiteral(s: string): string {
+	return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+}
+
 export const PACKAGE_JSON_TEMPLATE = (plan: HarnessPlan) => ({
 	name: plan.name,
 	module: "src/main.tsx",
@@ -175,8 +185,8 @@ async function ensureConfig(): Promise<ProviderConfig> {
 function showBanner(): void {
   console.log(chalk.cyan(\`
 ╔══════════════════════════════════╗
-║    ${plan.name.padEnd(30)}║
-║    ${plan.description.slice(0, 28).padEnd(30)}║
+║    ${escapeForTemplateLiteral(plan.name).padEnd(30)}║
+║    ${escapeForTemplateLiteral(plan.description.slice(0, 28)).padEnd(30)}║
 ╚══════════════════════════════════╝\`));
 }
 
@@ -314,7 +324,7 @@ async function startMcpServer(): Promise<void> {
 // ─── Entry ───────────────────────────────────────────────────────
 
 const program = new Command();
-program.name("${plan.name}").description("${plan.description}").version("0.1.0").option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
+program.name("${plan.name}").description(${JSON.stringify(plan.description)}).version("0.1.0").option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
   if (opts.mcp) { await startMcpServer(); return; }
   if (!opts.classic && process.stdout.isTTY && process.stdin.isTTY) {
     await startTuiApp(Boolean(opts.resume));
