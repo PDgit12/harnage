@@ -40,11 +40,16 @@ export async function startTui(
 		branch = undefined;
 	}
 
-	let resumeState: import("../loop/types").LoopState | undefined;
-	if (resume) {
-		const { recoverLastLoop } = await import("../loop/persistence");
-		resumeState = (await recoverLastLoop()) ?? undefined;
-	}
+	const { recoverLastLoop } = await import("../loop/persistence");
+	const lastState = await recoverLastLoop();
+	const unfinished =
+		lastState && lastState.phase !== "done" && lastState.phase !== "failed"
+			? lastState
+			: undefined;
+
+	const resumeState = resume ? unfinished : undefined;
+	const unfinishedHint = resume ? undefined : unfinished?.goal;
+	const noResumeFound = resume && !unfinished;
 
 	const { waitUntilExit } = render(
 		<App
@@ -52,6 +57,8 @@ export async function startTui(
 			engine={engine}
 			branch={branch}
 			resumeState={resumeState}
+			unfinishedHint={unfinishedHint}
+			noResumeFound={noResumeFound}
 		/>,
 	);
 	await waitUntilExit();
