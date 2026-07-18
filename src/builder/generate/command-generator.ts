@@ -83,6 +83,192 @@ export async function call(_args: string[], _context: unknown): Promise<{ value:
   };
 }
 `,
+	calibrate: `// Measures the plugged-in model against the T1-T5 acceptance battery across
+// loop-mode x edit-format combinations, then writes the winner to
+// ~/.<name>/profile.json. resolveProfile() merges it on top of any baked
+// per-model curation (measured > baked > base) so the harness reconfigures
+// itself around the model that is ACTUALLY installed, not just its inferred
+// family. Fail-safe: a missing/corrupt profile.json leaves resolveProfile's
+// current behavior unchanged (see profiles.ts readCalibration()).
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import type { LoopMode, ModelProfile } from "../profiles";
+
+interface CalibrationTask {
+  id: string;
+  goal: string;
+  check: (out: string, fixtureDir: string) => boolean;
+}
+
+const TASKS: CalibrationTask[] = [
+  {
+    id: "T1 file census",
+    goal: "Count the files in the current directory grouped by extension and report the totals.",
+    check: (o) => /\\b(ts|js|md)\\b/.test(o) && /\\d/.test(o),
+  },
+  {
+    id: "T2 targeted read",
+    goal: "What does the file a.ts export? Read it and answer.",
+    check: (o) => /greet/i.test(o),
+  },
+  {
+    id: "T3 multi-step",
+    goal: "Find the largest .ts file in the current directory and show its first few lines.",
+    check: (o) => /LARGEST/.test(o) || /big\\.ts/.test(o),
+  },
+  {
+    id: "T4 write path",
+    goal: "Create a file named hello.txt containing exactly the text HELLO in the current directory.",
+    check: (_o, fx) =>
+      existsSync(join(fx, "hello.txt")) && /HELLO/.test(readFileSync(join(fx, "hello.txt"), "utf-8")),
+  },
+  {
+    id: "T5 recovery",
+    goal: "Read the file does-not-exist-42.ts and summarize it.",
+    check: (o) =>
+      /no (such )?file|not (be )?(found|exist)|does ?n'?t exist|could ?n'?t|couldn't|unable|cannot|can't find|isn'?t (there|present)/i.test(o),
+  },
+];
+
+function writeFixture(dir: string): void {
+  writeFileSync(join(dir, "a.ts"), "export function greet(): string {\\n  return 'hi';\\n}\\n");
+  writeFileSync(join(dir, "b.js"), "module.exports = { ok: true };\\n");
+  writeFileSync(join(dir, "readme.md"), "# Fixture\\nSample project.\\n");
+  const big = "// LARGEST\\n" + Array.from({ length: 80 }, (_, i) => \`export const v\${i} = \${i};\`).join("\\n") + "\\n";
+  writeFileSync(join(dir, "big.ts"), big);
+}
+
+const CANDIDATE_LOOPS: LoopMode[] = ["plan-act", "pipeline"];
+const CANDIDATE_EDIT_FORMATS: Array<ModelProfile["editFormat"]> = ["search-replace", "whole-file"];
+
+interface CandidateResult {
+  loop: LoopMode;
+  editFormat: ModelProfile["editFormat"];
+  passCount: number;
+  medianMs: number;
+}
+
+export async function call(_args: string[], _context: unknown): Promise<{ value: string }> {
+  const [{ resolveProfile }, { getAllTools }, { LoopEngine }, pkgMod] = await Promise.all([
+    import("../profiles"),
+    import("../tools"),
+    import("../engine"),
+    import("../../package.json"),
+  ]);
+  const pkgName = (pkgMod as { name?: string }).name ?? (pkgMod as { default?: { name?: string } }).default?.name ?? "harness";
+
+  const configDir = join(homedir(), \`.\${pkgName}\`);
+  const configPath = join(configDir, "config.json");
+  let model = "llama3";
+  let providerType: "ollama" | "openrouter" = "ollama";
+  let baseUrl = "http://localhost:11434";
+  let maxTokens = 4096;
+  let contextTokens = 8192;
+  if (existsSync(configPath)) {
+    try {
+      const saved = JSON.parse(readFileSync(configPath, "utf-8")) as {
+        type?: "ollama" | "openrouter";
+        model?: string;
+        baseUrl?: string;
+        maxTokens?: number;
+        contextTokens?: number;
+      };
+      model = saved.model ?? model;
+      providerType = saved.type ?? providerType;
+      baseUrl = saved.baseUrl ?? baseUrl;
+      maxTokens = saved.maxTokens ?? maxTokens;
+      contextTokens = saved.contextTokens ?? contextTokens;
+    } catch { /* fall back to defaults */ }
+  }
+
+  const before = resolveProfile(model, contextTokens);
+  const lines: string[] = [
+    "\\x1b[1mCalibrating " + model + "\\x1b[0m",
+    \`Before: \${before.tier} tier · \${before.loop} loop · \${before.editFormat} edit-format\\n\`,
+  ];
+
+  const fixture = await mkdtemp(join(tmpdir(), "calibrate-"));
+  writeFixture(fixture);
+  const policy = {
+    mode: "default" as const,
+    rules: [
+      { pattern: "bash(*)", allow: true },
+      { pattern: "file_write(*)", allow: true },
+      { pattern: "file_edit(*)", allow: true },
+    ],
+  };
+  const providerConfig = { type: providerType, model, baseUrl, maxTokens, contextTokens };
+  const tools = await getAllTools();
+
+  const originalCwd = process.cwd();
+  const results: CandidateResult[] = [];
+  try {
+    process.chdir(fixture);
+    for (const loop of CANDIDATE_LOOPS) {
+      for (const editFormat of CANDIDATE_EDIT_FORMATS) {
+        const profile: ModelProfile = { ...before, loop, editFormat };
+        let passCount = 0;
+        const latencies: number[] = [];
+        for (const task of TASKS) {
+          const started = performance.now();
+          let out = "";
+          let err: string | undefined;
+          try {
+            const engine = new LoopEngine({ tools, providerConfig, profile, policy, persistSession: false });
+            out = await engine.run(task.goal);
+          } catch (e) {
+            err = e instanceof Error ? e.message : String(e);
+          }
+          latencies.push(performance.now() - started);
+          if (!err && task.check(out, fixture)) passCount++;
+        }
+        latencies.sort((a, b) => a - b);
+        const medianMs = latencies[Math.floor(latencies.length / 2)] ?? 0;
+        results.push({ loop, editFormat, passCount, medianMs });
+        lines.push(\`  \${loop.padEnd(10)} \${editFormat.padEnd(14)} \${passCount}/\${TASKS.length} passed · median \${Math.round(medianMs)}ms\`);
+      }
+    }
+  } finally {
+    process.chdir(originalCwd);
+    await rm(fixture, { recursive: true, force: true });
+  }
+
+  results.sort((a, b) => b.passCount - a.passCount || a.medianMs - b.medianMs);
+  const winner = results[0];
+  if (!winner) {
+    lines.push("\\n\\x1b[31mNo candidates ran — is the provider reachable?\\x1b[0m");
+    return { value: lines.join("\\n") };
+  }
+
+  await mkdir(configDir, { recursive: true });
+  const profilePath = join(configDir, "profile.json");
+  writeFileSync(
+    profilePath,
+    JSON.stringify(
+      {
+        model,
+        profile: { loop: winner.loop, editFormat: winner.editFormat },
+        passCount: winner.passCount,
+        totalTasks: TASKS.length,
+        calibratedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+
+  const after = resolveProfile(model, contextTokens);
+  lines.push(
+    "",
+    \`\\x1b[1mWinner:\\x1b[0m \${winner.loop} loop · \${winner.editFormat} edit-format · \${winner.passCount}/\${TASKS.length} passed\`,
+    \`After:  \${after.tier} tier · \${after.loop} loop · \${after.editFormat} edit-format\`,
+    \`\\x1b[2mSaved to \${profilePath}\\x1b[0m\`,
+  );
+  return { value: lines.join("\\n") };
+}
+`,
 	doctor: `import { execSync } from "node:child_process";
 
 export async function call(_args: string[], _context: unknown): Promise<{ value: string }> {
@@ -179,5 +365,12 @@ export async function generateCommandFiles(
 			`${COMMAND_TEMPLATES.doctor}\n`,
 		);
 		writtenCommands.add("doctor");
+	}
+	if (!writtenCommands.has("calibrate")) {
+		await writeFile(
+			join(cmdsDir, "calibrate.ts"),
+			`${COMMAND_TEMPLATES.calibrate}\n`,
+		);
+		writtenCommands.add("calibrate");
 	}
 }

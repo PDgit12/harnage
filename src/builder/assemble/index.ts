@@ -103,7 +103,7 @@ export async function assembleAndVerify(
 	// Harness subsystems: engine + compaction, permissions, skills, session, sub-agents
 	await writeFile(
 		join(srcDir, "profiles.ts"),
-		HARNESS_PROFILES(plan.modelProfileOverrides ?? {}),
+		HARNESS_PROFILES(plan.modelProfileOverrides ?? {}, plan.name),
 	);
 	await writeFile(join(srcDir, "pipeline.ts"), PIPELINE_TEMPLATE(plan));
 	await writeFile(join(srcDir, "engine.ts"), ENGINE_TEMPLATE(plan));
