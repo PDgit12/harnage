@@ -66,6 +66,19 @@ describe("generated eval graders", () => {
 		expect(mod.parseJudgeScore("no number")).toBeNull();
 	});
 
+	// audit N7: the score must be read from the SCORE: label, not the first
+	// stray digit in the reason text (a year, a "1." marker, a version).
+	it("anchors on the SCORE: label, ignoring stray digits", () => {
+		// stray digits precede the real score — the old /[1-5]/ grabbed "1"
+		expect(mod.parseJudgeScore("Answer cites 2021; item 1. SCORE: 5 — great")?.detail).toBe("score 5/5");
+		// a low digit in prose must not be mistaken for a failing score
+		expect(mod.parseJudgeScore("1 issue noted. SCORE: 4 — good")?.pass).toBe(true);
+		// no SCORE: label → unscorable, even with digits present
+		expect(mod.parseJudgeScore("this rates about a 4 out of 5")).toBeNull();
+		// case-insensitive + whitespace tolerant
+		expect(mod.parseJudgeScore("score:3 ok")?.detail).toBe("score 3/5");
+	});
+
 	it("builds a two-message judge request", () => {
 		const req = mod.judgeRequest("goal", "answer");
 		expect(req.map((m) => m.role)).toEqual(["system", "user"]);

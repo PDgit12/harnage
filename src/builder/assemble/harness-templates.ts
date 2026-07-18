@@ -166,6 +166,9 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 
 const DB_PATH = join(homedir(), ".${plan.name}", "memory.db");
+// Upper bound on episodic (dated-event) rows — pruned to the newest this many
+// on each write so the store stays bounded over a long-lived deployment.
+const MAX_EPISODIC = 5000;
 
 export interface RecalledFact { subject: string; fact: string; }
 export interface RecalledEvent { event: string; occurred_at: string; }
@@ -211,6 +214,10 @@ export class MemoryStore {
     const when = (occurredAt ?? "").trim() || new Date().toISOString();
     try {
       db.run("INSERT INTO episodic (event, occurred_at, created_at) VALUES (?, ?, ?)", [e, when, new Date().toISOString()]);
+      // Episodic has no primary key, so unlike semantic (INSERT OR REPLACE) it
+      // grows without bound. Cap it: keep only the newest MAX_EPISODIC rows so a
+      // long-lived store can't balloon the DB.
+      db.run("DELETE FROM episodic WHERE rowid NOT IN (SELECT rowid FROM episodic ORDER BY created_at DESC, rowid DESC LIMIT ?)", [MAX_EPISODIC]);
     } catch { /* best-effort */ }
   }
 
@@ -288,11 +295,13 @@ export function judgeRequest(goal: string, answer: string): Msg[] {
   ];
 }
 
-/** Parse the judge's 1–5 score from raw text. Returns null if unscorable. */
+/** Parse the judge's 1–5 score from raw text. Anchored on the "SCORE:" label
+ * the judge is told to emit, so a stray digit in the reason text (e.g. a year
+ * or a "1." list marker) can't be mistaken for the score. Null if unscorable. */
 export function parseJudgeScore(raw: string): EvalResult | null {
-  const m = (raw ?? "").match(/[1-5]/);
+  const m = (raw ?? "").match(/SCORE:\\s*([1-5])/i);
   if (!m) return null;
-  const score = Number(m[0]);
+  const score = Number(m[1]);
   return { name: "judge_quality", pass: score >= 3, detail: "score " + score + "/5" };
 }
 `;
@@ -425,7 +434,11 @@ export interface PermissionPolicy {
 }
 
 const POLICY_PATH = join(homedir(), ".${plan.name}", "permissions.json");
-const READ_ONLY_TOOLS = new Set(["file_read", "glob", "grep", "web_fetch", "web_search"]);
+// Local reads are always allowed. Network tools (web_fetch/web_search) are
+// deliberately NOT here: outbound egress must be granted by an explicit rule
+// even in "read-only" plan mode, so a sovereign deployment can't phone home or
+// exfiltrate via URL without consent.
+const READ_ONLY_TOOLS = new Set(["file_read", "glob", "grep"]);
 
 export function loadPolicy(): PermissionPolicy {
   if (existsSync(POLICY_PATH)) {

@@ -31,6 +31,12 @@ describe("HARNESS_MEMORY template", () => {
 		expect(code).toContain('process.env.HARNAGE_MEMORY === "off"');
 	});
 
+	it("caps episodic rows so the store stays bounded (audit N5)", () => {
+		expect(code).toContain("MAX_EPISODIC = 5000");
+		expect(code).toContain("DELETE FROM episodic WHERE rowid NOT IN");
+		expect(code).toContain("ORDER BY created_at DESC, rowid DESC LIMIT ?");
+	});
+
 	it("emits an escaped newline, not a collapsed literal linebreak", () => {
 		// Must be the two characters backslash-n inside the join, so the emitted
 		// file contains \n rather than a real newline that would break the string.
