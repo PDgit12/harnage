@@ -58,6 +58,20 @@ describe("chassis hardening — audit fixes in generated source", () => {
 		expect(session).toContain("console.warn");
 	});
 
+	it("field-defect: a <recalled_memory>-backed answer skips the forced-tool-use and verify gates", () => {
+		// the guard that detects an injected recalled-memory block
+		expect(engine).toContain('m.content.includes("<recalled_memory>")');
+		expect(engine).toContain("const memoryBacked = this.messages.some(");
+		// act-before-answer push is suppressed when memory-backed
+		expect(engine).toContain(
+			"!this.isSmallTalk(goal) && !memoryBacked",
+		);
+		// filesystem verify chase is suppressed when memory-backed
+		expect(engine).toContain(
+			"!verifyChecked && this.tools.length > 0 && !memoryBacked",
+		);
+	});
+
 	it("#10 parses each streamed tool call's args in its own try", () => {
 		expect(engine).toContain(
 			"try { input = JSON.parse(a.args || ",

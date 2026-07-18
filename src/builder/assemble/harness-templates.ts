@@ -1531,10 +1531,19 @@ export class LoopEngine {
       this.nudged = false;
 
       if (decision.action === "final") {
+        // Memory-grounded answer: when the deterministic recall gate already
+        // seeded a <recalled_memory> block into the transcript (the facts this
+        // exact question needs), answering "from memory" is exactly right — the
+        // recalled data IS the grounding. Skip the act-before-answer push and
+        // the filesystem verify chase, so a correct first-pass answer isn't
+        // regressed into a wrong one by an ENOENT tool hunt for the same fact.
+        const memoryBacked = this.messages.some(
+          (m) => m.role === "system" && typeof m.content === "string" && m.content.includes("<recalled_memory>"),
+        );
         // Act-before-answer: a small model often answers from memory on turn 1
         // without ever calling a tool (its #1 task-following failure). If it
         // finalizes before touching a single tool, push back once.
-        if (toolsUsed === 0 && !actNudged && this.tools.length > 0 && !this.isSmallTalk(goal)) {
+        if (toolsUsed === 0 && !actNudged && this.tools.length > 0 && !this.isSmallTalk(goal) && !memoryBacked) {
           actNudged = true;
           this.onEvent?.({ type: "status", content: "pushing model to use a tool" });
           this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
@@ -1548,7 +1557,7 @@ export class LoopEngine {
         // the model pick where to look again. Deterministic; a genuine absence
         // survives (the file simply isn't in the list). Fires once.
         if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
-            !verifyChecked && this.tools.length > 0 &&
+            !verifyChecked && this.tools.length > 0 && !memoryBacked &&
             NEGATIVE_CLAIM.test(unwrapFinal(decision.answer ?? ""))) {
           verifyChecked = true;
           this.onEvent?.({ type: "status", content: "verifying claim against the filesystem" });
