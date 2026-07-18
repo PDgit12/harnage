@@ -123,3 +123,28 @@ describe("generated permissions — bash chaining guard", () => {
 		}
 	});
 });
+
+// audit #7: network egress must not be auto-allowed — not even in plan mode.
+describe("generated permissions — network egress gating", () => {
+	it("web_fetch/web_search need an explicit rule in default mode", () => {
+		const policy = { mode: "default", rules: [] };
+		expect(P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed).toBe(false);
+		expect(P.checkPermission(policy, "web_search", { pattern: "q" }).allowed).toBe(false);
+		// local reads stay allowed
+		expect(P.checkPermission(policy, "file_read", { path: "a.ts" }).allowed).toBe(true);
+	});
+
+	it("denies egress in plan mode even though it is 'read-only'", () => {
+		const policy = { mode: "plan", rules: [] };
+		expect(P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed).toBe(false);
+		expect(P.checkPermission(policy, "file_read", { path: "a.ts" }).allowed).toBe(true);
+	});
+
+	it("honors an explicit egress allow rule", () => {
+		const policy = {
+			mode: "default",
+			rules: [{ pattern: "web_fetch(*)", allow: true }],
+		};
+		expect(P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed).toBe(true);
+	});
+});
