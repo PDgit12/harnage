@@ -10,6 +10,15 @@ function escapeForTemplateLiteral(s: string): string {
 	return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
 }
 
+/**
+ * A `//` line comment in GENERATED source ends at the first line terminator —
+ * strip anything that could end it early and let subsequent text run as
+ * real (possibly injected) code.
+ */
+function commentSafe(s: string): string {
+	return s.replace(/[\r\n\u2028\u2029]+/g, " ");
+}
+
 export const PACKAGE_JSON_TEMPLATE = (plan: HarnessPlan) => ({
 	name: plan.name,
 	module: "src/main.tsx",
@@ -99,11 +108,11 @@ async function resolveProviderConfig(): Promise<ProviderConfig> {
   return { type: "ollama", model: localModel, baseUrl: "http://localhost:11434", maxTokens: 4096, contextTokens: 8192 };
 }
 
-// This harness was packed for "${plan.defaultLocalModel ?? "llama3"}" at build
+// This harness was packed for "${commentSafe(plan.defaultLocalModel ?? "llama3")}" at build
 // time; at runtime we prefer what's installed AND runs at usable speed on
 // this machine (speed-first caps: 16GB→8B, 32GB→14B, 64GB→33B, 96GB+→70B).
 async function detectLocalModel(): Promise<string> {
-  const packed = "${plan.defaultLocalModel ?? "llama3"}";
+  const packed = ${JSON.stringify(plan.defaultLocalModel ?? "llama3")};
   try {
     const { totalmem } = await import("node:os");
     const ramGb = totalmem() / 1024 ** 3;
@@ -159,7 +168,7 @@ async function ensureConfig(): Promise<ProviderConfig> {
   const type = choice === "1" ? "openrouter" : "ollama";
   let apiKey: string | undefined;
   let baseUrl: string | undefined;
-  let modelDefault = type === "openrouter" ? "gpt-4o" : "${plan.defaultLocalModel ?? "llama3"}";
+  let modelDefault = type === "openrouter" ? "gpt-4o" : ${JSON.stringify(plan.defaultLocalModel ?? "llama3")};
   if (type === "openrouter") {
     apiKey = (await rl.question("  API key: ")).trim();
   } else {
@@ -305,8 +314,14 @@ async function startMcpServer(): Promise<void> {
   const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
   const { ListToolsRequestSchema, CallToolRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
   const { getAllTools } = await import("./tools.ts");
+  const { checkPermission, loadPolicy } = await import("./permissions.ts");
   const tools = await getAllTools();
-  const ctx = { cwd: process.cwd(), env: process.env as Record<string, string | undefined>, permissions: { mode: "default" as const, rules: [] }, sandbox: "none" };
+  // MCP is a headless, non-interactive transport — there is no UI to escalate
+  // a permission prompt to, so this runs through the SAME policy the TUI/REPL
+  // enforce (real persisted rules, not a hardcoded always-allow stand-in) and
+  // any non-allowed verdict is a hard deny, never an implicit approval.
+  const policy = loadPolicy();
+  const ctx = { cwd: process.cwd(), env: process.env as Record<string, string | undefined>, permissions: { mode: policy.mode, rules: policy.rules }, sandbox: "none" };
 
   const server = new Server({ name: "${plan.name}", version: "0.1.0" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -315,7 +330,15 @@ async function startMcpServer(): Promise<void> {
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const tool = tools.find(t => t.name === req.params.name);
     if (!tool) throw new Error(\`Unknown tool: \${req.params.name}\`);
-    const result = await tool.call(req.params.arguments ?? {}, ctx);
+    const parsed = tool.inputSchema.safeParse(req.params.arguments ?? {});
+    if (!parsed.success) {
+      return { content: [{ type: "text", text: \`Invalid arguments for \${tool.name}: \${parsed.error.message}\` }], isError: true };
+    }
+    const verdict = checkPermission(policy, tool.name, parsed.data);
+    if (!verdict.allowed) {
+      return { content: [{ type: "text", text: \`Permission denied for \${tool.name}: \${verdict.reason ?? "not allowed"}\` }], isError: true };
+    }
+    const result = await tool.call(parsed.data, ctx);
     return { content: [{ type: "text", text: result.content ?? JSON.stringify(result.data ?? "") }], isError: result.isError };
   });
   await server.connect(new StdioServerTransport());
