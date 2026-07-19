@@ -35,6 +35,7 @@
     "@types/bun": "latest",
     "@types/react": "^18",
     "@vitest/coverage-v8": "^4.1.10",
+    "react-devtools-core": "^7.0.1",
     "vitest": "^4.1.10"
   },
   "peerDependencies": {

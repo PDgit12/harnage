@@ -9,6 +9,7 @@ import type { HarnessPlan } from "../index";
 
 export const HARNESS_PROFILES = (
 	overrides: Record<string, unknown> = {},
+	harnessName = "harness",
 ) => `// ModelProfile — per-model scaffold adaptation (Engine v3). Resolves the
 // plugged-in model to a profile that reconfigures the whole engine: dispatch
 // mode, tool exposure, decoding discipline, and loop structure. This is what
@@ -16,6 +17,9 @@ export const HARNESS_PROFILES = (
 // around the brain. Frontier models get a free native-tool loop; small local
 // models get grammar-forced JSON dispatch + a tight tool budget + structure,
 // so narration-instead-of-acting becomes physically impossible.
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type Tier = "frontier" | "strong" | "mid" | "small";
 export type LoopMode = "free" | "plan-act" | "pipeline";
@@ -74,11 +78,29 @@ function resolveBase(model: string, contextTokens = 8192): ModelProfile {
 // tool-caller earns the free loop). Empty unless a catalog model was picked.
 const BAKED_OVERRIDES: Record<string, Partial<ModelProfile>> = ${JSON.stringify(overrides)};
 
-/** Resolve a model to its profile, then merge any baked per-model curation. */
+// Measured per-model profile written by the \`calibrate\` command
+// (~/.${harnessName}/profile.json) — a live bench-battery result, so it
+// outranks build-time guesses. Fail-safe: any read/parse/shape error is
+// swallowed and resolveProfile falls back to base+baked unchanged.
+function readCalibration(model: string): Partial<ModelProfile> | undefined {
+  try {
+    const p = join(homedir(), ".${harnessName}", "profile.json");
+    if (!existsSync(p)) return undefined;
+    const data = JSON.parse(readFileSync(p, "utf-8"));
+    if (data.model !== model || typeof data.profile !== "object" || data.profile === null) return undefined;
+    return data.profile as Partial<ModelProfile>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve a model to its profile: measured calibration > baked curation > size-tier base. */
 export function resolveProfile(model: string, contextTokens = 8192): ModelProfile {
   const base = resolveBase(model, contextTokens);
   const ov = BAKED_OVERRIDES[model.toLowerCase()];
-  return ov ? { ...base, ...ov } : base;
+  const merged = ov ? { ...base, ...ov } : base;
+  const measured = readCalibration(model);
+  return measured ? { ...merged, ...measured } : merged;
 }
 `;
 
@@ -144,6 +166,9 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 
 const DB_PATH = join(homedir(), ".${plan.name}", "memory.db");
+// Upper bound on episodic (dated-event) rows — pruned to the newest this many
+// on each write so the store stays bounded over a long-lived deployment.
+const MAX_EPISODIC = 5000;
 
 export interface RecalledFact { subject: string; fact: string; }
 export interface RecalledEvent { event: string; occurred_at: string; }
@@ -189,6 +214,10 @@ export class MemoryStore {
     const when = (occurredAt ?? "").trim() || new Date().toISOString();
     try {
       db.run("INSERT INTO episodic (event, occurred_at, created_at) VALUES (?, ?, ?)", [e, when, new Date().toISOString()]);
+      // Episodic has no primary key, so unlike semantic (INSERT OR REPLACE) it
+      // grows without bound. Cap it: keep only the newest MAX_EPISODIC rows so a
+      // long-lived store can't balloon the DB.
+      db.run("DELETE FROM episodic WHERE rowid NOT IN (SELECT rowid FROM episodic ORDER BY created_at DESC, rowid DESC LIMIT ?)", [MAX_EPISODIC]);
     } catch { /* best-effort */ }
   }
 
@@ -266,11 +295,13 @@ export function judgeRequest(goal: string, answer: string): Msg[] {
   ];
 }
 
-/** Parse the judge's 1–5 score from raw text. Returns null if unscorable. */
+/** Parse the judge's 1–5 score from raw text. Anchored on the "SCORE:" label
+ * the judge is told to emit, so a stray digit in the reason text (e.g. a year
+ * or a "1." list marker) can't be mistaken for the score. Null if unscorable. */
 export function parseJudgeScore(raw: string): EvalResult | null {
-  const m = (raw ?? "").match(/[1-5]/);
+  const m = (raw ?? "").match(/SCORE:\\s*([1-5])/i);
   if (!m) return null;
-  const score = Number(m[0]);
+  const score = Number(m[1]);
   return { name: "judge_quality", pass: score >= 3, detail: "score " + score + "/5" };
 }
 `;
@@ -403,7 +434,11 @@ export interface PermissionPolicy {
 }
 
 const POLICY_PATH = join(homedir(), ".${plan.name}", "permissions.json");
-const READ_ONLY_TOOLS = new Set(["file_read", "glob", "grep", "web_fetch", "web_search"]);
+// Local reads are always allowed. Network tools (web_fetch/web_search) are
+// deliberately NOT here: outbound egress must be granted by an explicit rule
+// even in "read-only" plan mode, so a sovereign deployment can't phone home or
+// exfiltrate via URL without consent.
+const READ_ONLY_TOOLS = new Set(["file_read", "glob", "grep"]);
 
 export function loadPolicy(): PermissionPolicy {
   if (existsSync(POLICY_PATH)) {
@@ -653,13 +688,15 @@ export function makeAgentTool(allTools: Tool[], engineConfig: EngineConfig): Too
 
 export const EXAMPLE_SKILL = (plan: HarnessPlan) => `---
 name: verify-before-done
-description: Always verify claims with real command output before declaring done
-triggers:
+description: Verify claims with real command output before declaring a task done
+triggers: build, implement, create, fix, refactor, test, verify, run, deploy, ship
+# ${plan.name} was generated by harnage. Edit or add .md skills in this directory
+# to teach the agent your workflows. This is a frontmatter comment — the skill
+# parser ignores it, so it never enters the model's prompt.
 ---
 Before saying a task is done, run the relevant verification (tests, typecheck,
 or a direct check of the produced artifact) and quote the real output. Never
-claim success without evidence. This harness (${plan.name}) was generated by
-harnage — edit or add skills in this directory to teach it your workflows.
+claim success without evidence.
 `;
 
 export const PIPELINE_TEMPLATE = (
@@ -1496,10 +1533,19 @@ export class LoopEngine {
       this.nudged = false;
 
       if (decision.action === "final") {
+        // Memory-grounded answer: when the deterministic recall gate already
+        // seeded a <recalled_memory> block into the transcript (the facts this
+        // exact question needs), answering "from memory" is exactly right — the
+        // recalled data IS the grounding. Skip the act-before-answer push and
+        // the filesystem verify chase, so a correct first-pass answer isn't
+        // regressed into a wrong one by an ENOENT tool hunt for the same fact.
+        const memoryBacked = this.messages.some(
+          (m) => m.role === "system" && typeof m.content === "string" && m.content.includes("<recalled_memory>"),
+        );
         // Act-before-answer: a small model often answers from memory on turn 1
         // without ever calling a tool (its #1 task-following failure). If it
         // finalizes before touching a single tool, push back once.
-        if (toolsUsed === 0 && !actNudged && this.tools.length > 0 && !this.isSmallTalk(goal)) {
+        if (toolsUsed === 0 && !actNudged && this.tools.length > 0 && !this.isSmallTalk(goal) && !memoryBacked) {
           actNudged = true;
           this.onEvent?.({ type: "status", content: "pushing model to use a tool" });
           this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
@@ -1513,7 +1559,7 @@ export class LoopEngine {
         // the model pick where to look again. Deterministic; a genuine absence
         // survives (the file simply isn't in the list). Fires once.
         if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
-            !verifyChecked && this.tools.length > 0 &&
+            !verifyChecked && this.tools.length > 0 && !memoryBacked &&
             NEGATIVE_CLAIM.test(unwrapFinal(decision.answer ?? ""))) {
           verifyChecked = true;
           this.onEvent?.({ type: "status", content: "verifying claim against the filesystem" });

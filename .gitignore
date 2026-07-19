@@ -56,3 +56,8 @@ docs/hermes-watchtower.md
 
 # per-worker orchestration identity (worktree-local)
 CLAUDE.local.md
+
+# internal — never public (personal instructions, agent defs, orchestration, learnings)
+CLAUDE.md
+.claude/
+.claude-flow/

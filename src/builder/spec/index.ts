@@ -37,6 +37,22 @@ const COMMAND_TRIGGERS: [string[], string[]][] = [
 	[["model", "provider"], ["/model"]],
 ];
 
+// The offline keyword path has no LLM to infer tool needs from prose, so a
+// prompt like "research assistant that can search the web" was silently
+// generating a harness with only ALWAYS_TOOLS — no web capability at all.
+// Mirrors LANGUAGE_MAP/COMMAND_TRIGGERS: match() does whole-word matching, so
+// these are additive (a prompt can trigger both).
+const TOOL_TRIGGERS: [string[], string[]][] = [
+	[
+		["search", "google", "browse the web", "internet search", "search engine"],
+		["web_search"],
+	],
+	[
+		["fetch", "scrape", "crawl", "webpage", "web page", "download a page"],
+		["web_fetch"],
+	],
+];
+
 function match(prompt: string, keywords: string[]): boolean {
 	const lower = prompt.toLowerCase();
 	return keywords.some((k) => {
@@ -152,6 +168,10 @@ export function parseIntent(
 
 	for (const [triggers, extras] of COMMAND_TRIGGERS) {
 		if (match(lower, triggers)) for (const c of extras) commands.add(c);
+	}
+
+	for (const [triggers, extras] of TOOL_TRIGGERS) {
+		if (match(lower, triggers)) for (const t of extras) tools.add(t);
 	}
 
 	let language: string[] = [...new Set(projectContext?.languages ?? [])];

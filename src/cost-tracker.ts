@@ -93,8 +93,12 @@ export class CostTracker {
 		withinBudget: boolean;
 		percentUsed: number;
 	} {
-		const percentUsed = (this.allTimeCost / ceilingUsd) * 100;
-		return { withinBudget: this.allTimeCost < ceilingUsd, percentUsed };
+		// The safety ceiling gates THIS session's spend. Checking the persisted
+		// all-time total here permanently locked out every run (loop, tests, TUI)
+		// once lifetime spend ever crossed the ceiling.
+		const sessionCost = this.sessionUsage.cost;
+		const percentUsed = (sessionCost / ceilingUsd) * 100;
+		return { withinBudget: sessionCost < ceilingUsd, percentUsed };
 	}
 
 	reset(): void {
