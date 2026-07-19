@@ -1813,13 +1813,72 @@ function permTarget(input: unknown): string {
 
 interface PermPrompt { tool: string; target: string; reason: string; resolve: (c: "allow" | "deny" | "always") => void; }
 
+// Branding — one accent for brand + active state, kept separate from semantic
+// colors (red=error, yellow=busy, green=success, magenta=command-mode). Baked
+// with this harness's OWN name so every generated harness boots branded.
+const ACCENT = "#22d3ee";
+const ACCENT_DIM = "#0e7490";
+const WORDMARK = ${JSON.stringify(plan.name)};
+const VERSION = "v0.1.0";
+const TAGLINE = ${JSON.stringify((plan.description ?? "").slice(0, 72) || "your own custom agent harness")};
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+// Per-character gradient {ch,color} pairs — Ink can't render ANSI-wrapped
+// strings inside <Text> (breaks yoga width), so each char gets its own span.
+function lerpHex(from: string, to: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(from);
+  const [r2, g2, b2] = hexToRgb(to);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+function wordmarkChars(text = WORDMARK): Array<{ ch: string; color: string }> {
+  return text.split("").map((ch, i) => ({
+    ch,
+    color: lerpHex(ACCENT, ACCENT_DIM, text.length <= 1 ? 0 : i / (text.length - 1)),
+  }));
+}
+
+// Fixed branded header — rendered once at the top of the tree, outside the
+// <Static> scrollback (it's a header, not a history event).
+function Banner({ config, profile }: { config: ProviderConfig; profile: ModelProfile }) {
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Box borderStyle="round" borderColor={ACCENT} paddingLeft={1} paddingRight={1}>
+        <Text>
+          <Text color={ACCENT}>{"⚙ "}</Text>
+          {wordmarkChars().map(({ ch, color }, i) => (
+            <Text key={i} color={color} bold>{ch}</Text>
+          ))}
+          <Text dimColor>{"  " + VERSION}</Text>
+        </Text>
+      </Box>
+      <Box paddingLeft={1} justifyContent="space-between">
+        <Text dimColor>{TAGLINE}</Text>
+        <Text>
+          <Text backgroundColor={ACCENT} color="black" bold>{" " + config.type + " "}</Text>
+          <Text dimColor>{" " + (config.model.split("/").pop() ?? config.model) + " · " + profile.tier + " tier"}</Text>
+        </Text>
+      </Box>
+      <Box paddingLeft={1}>
+        <Text dimColor>
+          <Text color={ACCENT}>/help</Text> all commands · type a goal to run the agent · esc to quit
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
 export function App({ config, tools, skills, profile, initialMessages, resumeGoal, unfinishedHint }: AppProps) {
   const { exit } = useApp();
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     const lines: HistoryItem[] = [
-      { kind: "info", text: "⚙ ${plan.name} — " + config.type + " · " + config.model },
       { kind: "info", text: "  scaffold: " + profile.tier + " tier · " + profile.loop + " loop · " + profile.toolCalling + " · " + profile.maxTools + " tools" },
-      { kind: "info", text: "  type a goal · / for commands · /help for the full list · esc to quit" },
     ];
     if (unfinishedHint) lines.push({ kind: "info", text: '  ⏸ unfinished task from last session: "' + unfinishedHint.slice(0, 100) + '" — restart with --resume to continue' });
     return lines;
@@ -1828,9 +1887,17 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   const [streamingText, setStreamingText] = useState("");
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
   const busyRef = useRef(false);
   const messagesRef = useRef<Array<Record<string, unknown>> | undefined>(initialMessages);
   const [perm, setPerm] = useState<PermPrompt | null>(null);
+
+  // Animate the busy spinner only while busy; clear the interval on idle.
+  useEffect(() => {
+    if (!busy) return;
+    const id = setInterval(() => setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(id);
+  }, [busy]);
 
   const push = useCallback((item: HistoryItem) => {
     setHistory((h) => [...h, item]);
@@ -1947,11 +2014,13 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
 
   return (
     <Box flexDirection="column">
+      <Banner config={config} profile={profile} />
+
       <Static items={history}>
         {(item, i) => (
           <Box key={i} paddingLeft={1}>
             {item.kind === "user" && (<Text><Text bold>You</Text><Text dimColor>: </Text>{item.text}</Text>)}
-            {item.kind === "agent" && (<Text><Text bold color="cyan">Agent</Text><Text dimColor>: </Text>{item.text}</Text>)}
+            {item.kind === "agent" && (<Text><Text bold color={ACCENT}>Agent</Text><Text dimColor>: </Text>{item.text}</Text>)}
             {item.kind === "tool" && <Text dimColor>↳ {item.label}</Text>}
             {item.kind === "error" && <Text color="red">✖ {item.text}</Text>}
             {item.kind === "info" && <Text dimColor>{item.text}</Text>}
@@ -1961,13 +2030,14 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
 
       {streamingText !== "" && (
         <Box paddingLeft={1}>
-          <Text><Text bold color="cyan">Agent</Text><Text dimColor>: </Text>{streamingText}</Text>
+          <Text><Text bold color={ACCENT}>Agent</Text><Text dimColor>: </Text>{streamingText}</Text>
         </Box>
       )}
 
       {busy && !perm && (
         <Box paddingLeft={1}>
-          <Text color="yellow">✳ {activeTool ? "Running " + activeTool + "…" : "Thinking…"}</Text>
+          <Text color={ACCENT}>{SPINNER_FRAMES[spinnerFrame]}</Text>
+          <Text color="yellow">{" " + (activeTool ? "Running " + activeTool + "…" : "Thinking…")}</Text>
         </Box>
       )}
 
@@ -1991,14 +2061,13 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
         </Box>
       )}
 
-      <Box borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
-        <Text color={input.startsWith("/") ? "magenta" : "cyan"}>{"❯ "}</Text>
+      <Box borderStyle="round" borderColor={input.startsWith("/") ? "magenta" : ACCENT} paddingLeft={1} paddingRight={1}>
+        <Text color={input.startsWith("/") ? "magenta" : ACCENT}>{"❯ "}</Text>
         <TextInput value={input} onChange={setInput} onSubmit={onSubmit} focus={perm === null} placeholder={busy ? "working…" : "type a goal · / for commands"} />
       </Box>
 
-      <Box paddingLeft={2} paddingRight={2} justifyContent="space-between">
-        <Text dimColor>⏵⏵ {busy ? "working" : "ready"} (esc to quit)</Text>
-        <Text dimColor>{config.model.split("/").pop()}</Text>
+      <Box paddingLeft={2} paddingRight={2}>
+        <Text dimColor>⏵⏵ {busy ? "working" : "ready"}  (esc to quit · /help for commands)</Text>
       </Box>
     </Box>
   );
