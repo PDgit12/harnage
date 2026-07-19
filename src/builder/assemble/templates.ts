@@ -1,16 +1,6 @@
 import type { HarnessPlan } from "../index";
 
 /**
- * Belt-and-braces escape for a value embedded inside a nested backtick
- * template literal in GENERATED source (e.g. the banner in showBanner()).
- * The plan builders already sanitize `description`, but this defends the
- * interpolation site itself against any value that reaches it unsanitized.
- */
-function escapeForTemplateLiteral(s: string): string {
-	return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
-}
-
-/**
  * A `//` line comment in GENERATED source ends at the first line terminator —
  * strip anything that could end it early and let subsequent text run as
  * real (possibly injected) code.
@@ -87,6 +77,38 @@ import { printTrace } from "./trace.ts";
 
 const CONFIG_DIR = join(homedir(), ".${plan.name}");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+
+// ─── Brand ───────────────────────────────────────────────────────
+// Signature accent — single source of truth for the wordmark, prompt, and
+// badge in this harness's classic REPL. Kept separate from semantic colors
+// (red=error, yellow=busy, green=success). No new deps: chalk only.
+
+const ACCENT = "#22d3ee";
+const ACCENT_DIM = "#0e7490";
+const HARNESS_NAME = ${JSON.stringify(plan.name)};
+const HARNESS_TAGLINE = ${JSON.stringify(plan.description)};
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function lerpHex(from: string, to: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(from);
+  const [r2, g2, b2] = hexToRgb(to);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return \`#\${[r, g, b].map(v => v.toString(16).padStart(2, "0")).join("")}\`;
+}
+function gradientWordmark(text: string): string {
+  return text
+    .split("")
+    .map((ch, i) => chalk.hex(lerpHex(ACCENT, ACCENT_DIM, text.length <= 1 ? 0 : i / (text.length - 1))).bold(ch))
+    .join("");
+}
+function chalkBadge(text: string): string {
+  return chalk.bgHex(ACCENT).black.bold(\` \${text} \`);
+}
 
 async function resolveProviderConfig(): Promise<ProviderConfig> {
   let type: ProviderConfig["type"] = "openrouter";
@@ -191,12 +213,21 @@ async function ensureConfig(): Promise<ProviderConfig> {
   return config;
 }
 
-function showBanner(): void {
-  console.log(chalk.cyan(\`
-╔══════════════════════════════════╗
-║    ${escapeForTemplateLiteral(plan.name).padEnd(30)}║
-║    ${escapeForTemplateLiteral(plan.description.slice(0, 28)).padEnd(30)}║
-╚══════════════════════════════════╝\`));
+function showBanner(config: ProviderConfig): void {
+  console.log(\`  \${chalk.hex(ACCENT)("⚙")} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim("v0.1.0")}\`);
+  console.log(chalk.dim("  ─────────────────────────────────────"));
+  console.log(chalk.dim(\`  \${HARNESS_TAGLINE}\`));
+  console.log();
+  console.log(\`  \${chalkBadge(\`\${config.type} · \${config.model}\`)}\`);
+  console.log();
+  console.log(
+    "  Type " +
+      chalk.hex(ACCENT)("/help") +
+      chalk.dim(" for commands  ·  ") +
+      chalk.hex(ACCENT)("/exit") +
+      chalk.dim(" to quit  ·  or type a goal to run the agent"),
+  );
+  console.log();
 }
 
 // ─── REPL ────────────────────────────────────────────────────────
@@ -229,9 +260,8 @@ async function startTuiApp(resume: boolean): Promise<void> {
 async function startRepl(resume = false): Promise<void> {
   try {
     const config = await ensureConfig();
-    showBanner();
+    showBanner(config);
     const profile = resolveProfile(config.model, config.contextTokens);
-    console.log(chalk.dim(\`Provider: \${config.type} | Model: \${config.model}\`));
     console.log(chalk.dim(\`Scaffold: \${profile.tier} tier · \${profile.loop} loop · \${profile.toolCalling} dispatch · \${profile.maxTools} tools\\n\`));
     const { getAllTools } = await import("./tools.ts");
     const tools = await getAllTools();
@@ -261,7 +291,7 @@ async function startRepl(resume = false): Promise<void> {
     }
 
     const rl = createInterface({ input: stdIn, output: stdOut });
-    rl.setPrompt(chalk.cyan("> "));
+    rl.setPrompt(\`\${chalk.hex(ACCENT)("❯")} \`);
 
     // Mid-task resume: the saved session ended with an unfinished goal, so
     // continue it immediately — the transcript already holds all prior steps.
