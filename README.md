@@ -9,6 +9,14 @@ harnage is two things in one repo:
 
 You own everything it generates. No SaaS, no lock-in — the output is a plain Bun/TypeScript project that runs against your local Ollama model or your own API key.
 
+## Install
+
+```bash
+npm i -g harnage        # or: bunx harnage@latest  (no install, run once)
+```
+
+Requires [bun](https://bun.com) ≥ 1.1 on your `PATH` — the npm package ships TypeScript source and runs it via bun directly (no separate build step). Don't want bun installed? Grab a prebuilt binary (darwin-arm64, linux-x64) from the [GitHub releases](https://github.com/PDgit12/harnage/releases) page instead — download, `chmod +x`, and run it directly, no runtime needed.
+
 ## Quick Start
 
 ```bash

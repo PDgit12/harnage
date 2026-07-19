@@ -1,8 +1,40 @@
 {
   "name": "harnage",
+  "version": "0.1.0",
+  "description": "Describe an agent — own a Claude Code-level harness that amplifies your work on any model, even local. harnage augments your work, it never just automates it.",
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "llm",
+    "harness",
+    "claude",
+    "ollama",
+    "cli",
+    "tui",
+    "mcp",
+    "code-generation"
+  ],
+  "homepage": "https://github.com/PDgit12/harnage#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PDgit12/harnage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PDgit12/harnage/issues"
+  },
+  "license": "MIT",
+  "author": "Piyush Dua",
   "module": "src/main.tsx",
   "type": "module",
-  "private": true,
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "files": [
+    "src",
+    "tsconfig.json",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "harnage": "./src/main.tsx"
   },
