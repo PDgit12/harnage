@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
+import { gradientWordmark, TAGLINE, VERSION } from "./ui/brand";
 
 export interface ProviderConfig {
 	type: "anthropic" | "openai" | "ollama" | "openrouter";
@@ -23,8 +24,8 @@ const DEFAULT_MODELS: Record<string, string> = {
 export async function setupWizard(): Promise<ProviderConfig> {
 	const rl = createInterface({ input, output });
 
-	console.log(chalk.bold("harnage v0.1.0"));
-	console.log(chalk.dim("AI Model = Brain. Harness = Hands."));
+	console.log(`⚙ ${gradientWordmark()}  ${chalk.dim(VERSION)}`);
+	console.log(chalk.dim(TAGLINE));
 	console.log(chalk.dim("Welcome! Let's set up your provider."));
 	console.log("");
 
