@@ -189,22 +189,28 @@ export async function verifyBuild(
 	const errors: string[] = [];
 
 	if (!opts?.skipInstall) {
-		try {
-			execSync("bun install", {
-				cwd: outputDir,
-				stdio: "pipe",
-				timeout: 120000,
-			});
-		} catch (e: unknown) {
-			const msg = e instanceof Error ? e : new Error(String(e));
-			const err = msg as {
-				stderr?: { toString(): string };
-				stdout?: { toString(): string };
-				message?: string;
-			};
-			errors.push(
-				`bun install failed: ${err.stderr?.toString() ?? err.message}`,
-			);
+		// One retry: a transient network/registry blip during install otherwise
+		// fails the whole build (observed as an empty node_modules + tsc noise).
+		for (let attempt = 1; attempt <= 2; attempt++) {
+			try {
+				execSync("bun install", {
+					cwd: outputDir,
+					stdio: "pipe",
+					timeout: 120000,
+				});
+				break;
+			} catch (e: unknown) {
+				if (attempt === 1) continue;
+				const msg = e instanceof Error ? e : new Error(String(e));
+				const err = msg as {
+					stderr?: { toString(): string };
+					stdout?: { toString(): string };
+					message?: string;
+				};
+				errors.push(
+					`bun install failed: ${err.stderr?.toString() ?? err.message}`,
+				);
+			}
 		}
 	}
 
