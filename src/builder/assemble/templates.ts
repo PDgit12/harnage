@@ -67,6 +67,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 
 import { LoopEngine, type ProviderConfig } from "./engine.ts";
+import { disconnectMcp } from "./mcp-client.ts";
 import { makeAgentTool } from "./subagent.ts";
 import { resolveProfile } from "./profiles.ts";
 import { loadSession } from "./session.ts";
@@ -77,6 +78,10 @@ import { printTrace } from "./trace.ts";
 
 const CONFIG_DIR = join(homedir(), ".${plan.name}");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+
+// External MCP client connections are process-lifetime — close them on every
+// exit path (Ctrl+C included) so a hung subprocess doesn't leave a zombie.
+process.on("SIGINT", async () => { await disconnectMcp(); process.exit(0); });
 
 // ─── Brand ───────────────────────────────────────────────────────
 // Signature accent — single source of truth for the wordmark, prompt, and
@@ -253,7 +258,11 @@ async function startTuiApp(resume: boolean): Promise<void> {
   const { waitUntilExit } = render(
     React.createElement(App, { config, tools, skills, initialMessages, profile, resumeGoal, unfinishedHint }),
   );
-  await waitUntilExit();
+  try {
+    await waitUntilExit();
+  } finally {
+    await disconnectMcp();
+  }
   process.exit(0);
 }
 
@@ -330,9 +339,10 @@ async function startRepl(resume = false): Promise<void> {
       rl.prompt();
     });
 
-    rl.on("close", () => { console.log("\\nGoodbye!"); process.exit(0); });
+    rl.on("close", async () => { console.log("\\nGoodbye!"); await disconnectMcp(); process.exit(0); });
   } catch (e) {
     console.error(chalk.red(\`Fatal: \${e instanceof Error ? e.message : e}\`));
+    await disconnectMcp();
     process.exit(1);
   }
 }
@@ -421,8 +431,13 @@ export function getTool(name: string): Promise<Tool> {
   });
 }
 
-export function getAllTools(): Promise<Tool[]> {
-  return Promise.all(toolNames.map((name) => getTool(name)));
+export async function getAllTools(): Promise<Tool[]> {
+  const tools = await Promise.all(toolNames.map((name) => getTool(name)));
+  // External MCP servers (mcp.json) — opt-in, best-effort: an absent or
+  // invalid config just means zero extra tools, never a startup failure.
+  const { loadMcpTools } = await import("./mcp-client.ts");
+  tools.push(...(await loadMcpTools().catch(() => [])));
+  return tools;
 }
 `;
 
@@ -467,6 +482,23 @@ export interface Tool<TInput = Record<string, unknown>, TOutput = unknown> {
 export const GITIGNORE_TEMPLATE = `node_modules/
 .harnage-build-*/
 config.json
+mcp.json
+`;
+
+// Copy-template a user fills in and saves as mcp.json (no dot) in the
+// harness root — loadMcpTools() reads it from process.cwd(), no cwd-walk or
+// ~/.harnage merge. Consumption is opt-in and best-effort: an absent or
+// empty file means zero MCP tools, no error, no startup delay. STDIO
+// servers only for MVP (transport/url deferred).
+export const MCP_JSON_EXAMPLE = `{
+  "servers": {
+    "example-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-example"],
+      "env": {}
+    }
+  }
+}
 `;
 
 export const TSCONFIG_TEMPLATE = {
@@ -632,6 +664,16 @@ cat ~/.${plan.name}/audit.jsonl
 # and the permission policy your security team pins:
 cat ~/.${plan.name}/permissions.json
 \`\`\`
+
+## MCP consumption (optional, off by default)
+
+This harness can call tools from external MCP servers, alongside its own
+built-in tools. Copy \`mcp.json.example\` to \`mcp.json\` in the harness root
+and list the servers to connect (stdio subprocesses only). With no
+\`mcp.json\`, zero MCP tools load — no error, no delay. Each configured
+server is a local subprocess the harness spawns and talks to over stdio —
+whatever that subprocess itself does (network calls, file access) is its
+own concern; review \`command\`/\`args\` before adding one on a sovereign box.
 
 ## Optional hardening
 

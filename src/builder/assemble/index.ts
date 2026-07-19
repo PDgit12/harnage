@@ -13,6 +13,7 @@ import {
 	GENERATED_TUI,
 	HARNESS_COMPACTION,
 	HARNESS_EVAL,
+	HARNESS_MCP_CLIENT,
 	HARNESS_MEMORY,
 	HARNESS_PERMISSIONS,
 	HARNESS_PROFILES,
@@ -26,6 +27,7 @@ import {
 	COMMANDS_REGISTRY,
 	DEPLOY_MD_TEMPLATE,
 	MAIN_ENTRY_TEMPLATE,
+	MCP_JSON_EXAMPLE,
 	PACKAGE_JSON_TEMPLATE,
 	PROVIDER_SERVICE,
 	SECURITY_MD_TEMPLATE,
@@ -99,6 +101,8 @@ export async function assembleAndVerify(
 	// Deliverable docs the customer's security team reads before a deployment.
 	await writeFile(join(outputDir, "DEPLOY.md"), DEPLOY_MD_TEMPLATE(plan));
 	await writeFile(join(outputDir, "SECURITY.md"), SECURITY_MD_TEMPLATE(plan));
+	// Copy-template for MCP consumption — opt-in, see DEPLOY.md.
+	await writeFile(join(outputDir, "mcp.json.example"), MCP_JSON_EXAMPLE);
 
 	// Harness subsystems: engine + compaction, permissions, skills, session, sub-agents
 	await writeFile(
@@ -115,6 +119,7 @@ export async function assembleAndVerify(
 	await writeFile(join(srcDir, "skills.ts"), HARNESS_SKILLS);
 	await writeFile(join(srcDir, "session.ts"), HARNESS_SESSION(plan));
 	await writeFile(join(srcDir, "subagent.ts"), HARNESS_SUBAGENT);
+	await writeFile(join(srcDir, "mcp-client.ts"), HARNESS_MCP_CLIENT(plan));
 	await writeFile(join(srcDir, "ui.tsx"), GENERATED_TUI(plan));
 	await mkdir(join(outputDir, "skills"), { recursive: true });
 	await writeFile(
