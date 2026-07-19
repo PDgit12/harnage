@@ -43,6 +43,14 @@ project that runs against your local Ollama model or your own API key.
 | **MCP dual-mode** | Serves an MCP server (`--mcp`) *and* consumes external MCP servers — few tools in this space do both. |
 | **Ink TUI** | Live slash-command menu, streaming output, plus a classic readline REPL fallback. |
 
+## Install
+
+```bash
+npm i -g harnage        # or: bunx harnage@latest  (no install, run once)
+```
+
+Requires [bun](https://bun.com) ≥ 1.1 on your `PATH` — the npm package ships TypeScript source and runs it via bun directly (no separate build step). Don't want bun installed? Grab a prebuilt binary (darwin-arm64, linux-x64) from the [GitHub releases](https://github.com/PDgit12/harnage/releases) page instead — download, `chmod +x`, and run it directly, no runtime needed.
+
 ## Quick Start
 
 **Build from source** (works today):
