@@ -10,22 +10,33 @@ import { loadMcpTools } from "./services/mcp/tools";
 import { buildSystemPrompt, DEFAULT_BLOCKS } from "./services/system-prompt";
 import type { Tool, ToolContext } from "./Tool";
 import { getAllTools } from "./tools";
+import {
+	ACCENT,
+	chalkBadge,
+	gradientWordmark,
+	SPINNER_FRAMES,
+	TAGLINE,
+	VERSION,
+} from "./ui/brand";
 import { formatInline } from "./utils/md";
 
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER = SPINNER_FRAMES;
+const accent = chalk.hex(ACCENT);
 
-function printBanner() {
-	console.log(chalk.cyan(chalk.bold("  ⚙ harnage  ")) + chalk.dim("v0.1.0"));
+function printBanner(config: ProviderConfig) {
+	console.log(`  ${accent("⚙")} ${gradientWordmark()}  ${chalk.dim(VERSION)}`);
 	console.log(chalk.dim("  ─────────────────────────────────────"));
-	console.log(chalk.dim("  Model = Brain · Harness = Hands"));
+	console.log(chalk.dim(`  ${TAGLINE}`));
+	console.log();
+	console.log(`  ${chalkBadge(`${config.type} · ${config.model}`)}`);
 	console.log();
 	console.log(
 		"  Type " +
-			chalk.cyan("/init") +
+			accent("/init") +
 			chalk.dim(" to build a harness  ·  ") +
-			chalk.cyan("/help") +
+			accent("/help") +
 			chalk.dim(" for commands  ·  ") +
-			chalk.cyan("/exit") +
+			accent("/exit") +
 			chalk.dim(" to quit"),
 	);
 	console.log();
@@ -81,7 +92,7 @@ export async function repl(
 	showBanner: boolean,
 	resume = false,
 ): Promise<void> {
-	if (showBanner) printBanner();
+	if (showBanner) printBanner(config);
 
 	const allTools = await getAllTools();
 	const mcpTools = await loadMcpTools().catch(() => [] as Tool[]);
@@ -155,7 +166,7 @@ export async function repl(
 	const rl = readline.createInterface({
 		input: process.stdin,
 		output: process.stdout,
-		prompt: chalk.dim("> "),
+		prompt: `${accent("❯")} `,
 		completer,
 	});
 
@@ -229,7 +240,7 @@ export async function repl(
 			spinI = 0;
 			spinner = setInterval(() => {
 				process.stdout.write(
-					`\r${chalk.cyan(SPINNER[spinI % SPINNER.length])} ${chalk.dim("thinking...")}  `,
+					`\r${accent(SPINNER[spinI % SPINNER.length])} ${chalk.dim("thinking...")}  `,
 				);
 				spinI++;
 			}, 80);
@@ -242,7 +253,7 @@ export async function repl(
 		};
 		const showAgent = () => {
 			if (!printedAgent) {
-				process.stdout.write(chalk.bold("  Agent") + chalk.dim(": "));
+				process.stdout.write(accent.bold("  Agent") + chalk.dim(": "));
 				printedAgent = true;
 			}
 		};

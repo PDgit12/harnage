@@ -7,6 +7,13 @@ import { conversation } from "../conv";
 import { costTracker } from "../cost-tracker";
 import type { LoopEngine } from "../loop/LoopEngine";
 import type { ProviderConfig } from "../services/api/client";
+import {
+	ACCENT,
+	SPINNER_FRAMES,
+	TAGLINE,
+	VERSION,
+	wordmarkChars,
+} from "./brand";
 
 export type HistoryItem =
 	| { kind: "user"; text: string }
@@ -24,6 +31,54 @@ interface AppProps {
 	unfinishedHint?: string;
 	/** --resume was passed but no interrupted loop was found. */
 	noResumeFound?: boolean;
+}
+
+function Banner({
+	config,
+	branch,
+}: {
+	config: ProviderConfig;
+	branch?: string;
+}) {
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Box
+				borderStyle="round"
+				borderColor={ACCENT}
+				paddingLeft={1}
+				paddingRight={1}
+			>
+				<Text>
+					<Text color={ACCENT}>{"⚙ "}</Text>
+					{wordmarkChars().map(({ ch, color }, i) => (
+						// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length static wordmark, never reorders
+						<Text key={i} color={color} bold>
+							{ch}
+						</Text>
+					))}
+					<Text dimColor>{`  ${VERSION}`}</Text>
+				</Text>
+			</Box>
+			<Box paddingLeft={1} justifyContent="space-between">
+				<Text dimColor>{TAGLINE}</Text>
+				<Text>
+					<Text backgroundColor={ACCENT} color="black" bold>
+						{` ${config.type} `}
+					</Text>
+					<Text
+						dimColor
+					>{` ${config.model}${branch ? `  ·  ${branch}` : ""}`}</Text>
+				</Text>
+			</Box>
+			<Box paddingLeft={1}>
+				<Text dimColor>
+					<Text color={ACCENT}>/init</Text> build a harness ·{" "}
+					<Text color={ACCENT}>/help</Text> all commands · or type a goal to run
+					the agent
+				</Text>
+			</Box>
+		</Box>
+	);
 }
 
 function toolLabel(name: string | undefined, input: unknown): string {
@@ -50,21 +105,16 @@ export function App({
 }: AppProps) {
 	const { exit } = useApp();
 	const [history, setHistory] = useState<HistoryItem[]>([
-		{ kind: "info", text: `⚙ harnage — ${config.type} · ${config.model}` },
-		{
-			kind: "info",
-			text: "  /init  build a harness   ·   /help  all commands   ·   or type a goal to run the agent",
-		},
 		...(unfinishedHint
 			? [
 					{
 						kind: "info" as const,
-						text: `  ⏸ unfinished task from last session: "${unfinishedHint.slice(0, 100)}" — restart with --resume to continue`,
+						text: `⏸ unfinished task from last session: "${unfinishedHint.slice(0, 100)}" — restart with --resume to continue`,
 					},
 				]
 			: []),
 		...(noResumeFound
-			? [{ kind: "info" as const, text: "  No interrupted loop to resume." }]
+			? [{ kind: "info" as const, text: "No interrupted loop to resume." }]
 			: []),
 	]);
 	const [input, setInput] = useState("");
@@ -72,8 +122,18 @@ export function App({
 	const [activeTool, setActiveTool] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [cost, setCost] = useState(0);
+	const [spinnerFrame, setSpinnerFrame] = useState(0);
 	const busyRef = useRef(false);
 	const engineMode = busy ? "working" : "ready";
+
+	useEffect(() => {
+		if (!busy) return;
+		const id = setInterval(
+			() => setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length),
+			80,
+		);
+		return () => clearInterval(id);
+	}, [busy]);
 
 	const push = useCallback((item: HistoryItem) => {
 		setHistory((h) => [...h, item]);
@@ -217,6 +277,8 @@ export function App({
 
 	return (
 		<Box flexDirection="column">
+			<Banner config={config} branch={branch} />
+
 			<Static items={history}>
 				{(item, i) => (
 					<Box key={i} paddingLeft={1}>
@@ -229,7 +291,7 @@ export function App({
 						)}
 						{item.kind === "agent" && (
 							<Text>
-								<Text bold color="cyan">
+								<Text bold color={ACCENT}>
 									Agent
 								</Text>
 								<Text dimColor>: </Text>
@@ -246,7 +308,7 @@ export function App({
 			{streamingText !== "" && (
 				<Box paddingLeft={1}>
 					<Text>
-						<Text bold color="cyan">
+						<Text bold color={ACCENT}>
 							Agent
 						</Text>
 						<Text dimColor>: </Text>
@@ -257,8 +319,10 @@ export function App({
 
 			{busy && (
 				<Box paddingLeft={1}>
+					<Text color={ACCENT}>{SPINNER_FRAMES[spinnerFrame]}</Text>
 					<Text color="yellow">
-						✳ {activeTool ? `Running ${activeTool}…` : "Thinking…"}
+						{" "}
+						{activeTool ? `Running ${activeTool}…` : "Thinking…"}
 					</Text>
 				</Box>
 			)}
@@ -267,15 +331,20 @@ export function App({
 				<Box flexDirection="column" paddingLeft={2}>
 					{slashMatches.map((c) => (
 						<Text key={c.name}>
-							<Text color="cyan">{c.name}</Text>
+							<Text color="magenta">{c.name}</Text>
 							<Text dimColor>{`  ${c.description}`}</Text>
 						</Text>
 					))}
 				</Box>
 			)}
 
-			<Box borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
-				<Text color={input.startsWith("/") ? "magenta" : "cyan"}>{"❯ "}</Text>
+			<Box
+				borderStyle="round"
+				borderColor={input.startsWith("/") ? "magenta" : ACCENT}
+				paddingLeft={1}
+				paddingRight={1}
+			>
+				<Text color={input.startsWith("/") ? "magenta" : ACCENT}>{"❯ "}</Text>
 				<TextInput
 					value={input}
 					onChange={setInput}
@@ -289,10 +358,7 @@ export function App({
 					⏵⏵ {engineMode}{" "}
 					<Text dimColor>(esc to quit · /help for commands)</Text>
 				</Text>
-				<Text dimColor>
-					{branch ? `${branch} · ` : ""}
-					{config.model.split("/").pop()} · ${cost.toFixed(4)}
-				</Text>
+				<Text dimColor>${cost.toFixed(4)}</Text>
 			</Box>
 		</Box>
 	);
