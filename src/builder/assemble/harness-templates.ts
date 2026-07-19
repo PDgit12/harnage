@@ -686,6 +686,118 @@ export function makeAgentTool(allTools: Tool[], engineConfig: EngineConfig): Too
 }
 `;
 
+// MCP consumption: a generated harness doesn't just SERVE MCP (--mcp), it also
+// CONSUMES external MCP servers. loadMcpTools() reads mcp.json from the harness
+// root, connects each server over stdio, and wraps every remote tool as a
+// chassis Tool named mcp__<server>__<tool>. These are NOT read-only, so they go
+// through the normal permission gate — never auto-allowed. Fully graceful:
+// no mcp.json → zero MCP tools; a dead server is skipped with a warning; a
+// broken call returns an error string, never a crash.
+export const HARNESS_MCP_CLIENT = (
+	plan: HarnessPlan,
+) => `// External MCP consumption — wraps remote MCP tools as local chassis tools.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { z } from "zod";
+import type { Tool, ToolContext } from "./Tool.ts";
+
+interface McpServerConfig { command: string; args?: string[]; env?: Record<string, string>; }
+interface McpConfig { servers?: Record<string, McpServerConfig>; }
+interface RemoteTool { name: string; description?: string; inputSchema?: unknown; }
+interface McpClient {
+  listTools(): Promise<{ tools?: RemoteTool[] }>;
+  callTool(req: { name: string; arguments: Record<string, unknown> }): Promise<{ content?: unknown; isError?: boolean }>;
+  close(): Promise<void>;
+}
+
+const CONFIG_PATH = join(process.cwd(), "mcp.json");
+// Live clients are memoized so tools reuse one connection per server; closed
+// on exit via disconnectMcp().
+const openClients: McpClient[] = [];
+
+/** Tool names must satisfy the permission matcher (\\\\w-), so map anything else to "_". */
+function sanitize(s: string): string { return s.replace(/[^A-Za-z0-9_-]/g, "_"); }
+
+async function connect(cfg: McpServerConfig): Promise<McpClient> {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const transport = new StdioClientTransport({ command: cfg.command, args: cfg.args ?? [], env: cfg.env });
+  const client = new Client({ name: ${JSON.stringify(plan.name + "-mcp-client")}, version: "0.1.0" }, { capabilities: {} });
+  await client.connect(transport);
+  return client as unknown as McpClient;
+}
+
+/** Wrap one remote tool as a chassis Tool. inputSchema validates loosely (the
+ * MCP server does the real validation) but surfaces the REMOTE JSON schema to
+ * the model so it calls with the tool's native parameters. */
+function wrap(server: string, client: McpClient, remote: RemoteTool): Tool {
+  const schema = z.record(z.string(), z.unknown());
+  const remoteSchema = (remote.inputSchema && typeof remote.inputSchema === "object")
+    ? (remote.inputSchema as Record<string, unknown>)
+    : { type: "object", properties: {} };
+  (schema as unknown as { toJSONSchema: () => unknown }).toJSONSchema = () => remoteSchema;
+  const toolName = "mcp__" + sanitize(server) + "__" + sanitize(remote.name);
+  return {
+    name: toolName,
+    description: (remote.description ?? ("MCP tool " + remote.name)) + " (external MCP server '" + server + "' — requires permission)",
+    inputSchema: schema as unknown as z.ZodType<Record<string, unknown>>,
+    isReadOnly: () => false,
+    async call(input: Record<string, unknown>, _context: ToolContext) {
+      try {
+        const res = await client.callTool({ name: remote.name, arguments: (input ?? {}) as Record<string, unknown> });
+        const parts = Array.isArray(res.content) ? res.content : [];
+        const text = parts
+          .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : JSON.stringify(p)))
+          .join("\\n")
+          .trim();
+        if (res.isError) return { error: text || ("MCP tool " + toolName + " reported an error"), isError: true };
+        return { content: text || "(no output)" };
+      } catch (err) {
+        return { error: "MCP call to " + toolName + " failed: " + (err instanceof Error ? err.message : String(err)), isError: true };
+      }
+    },
+  };
+}
+
+/** Read mcp.json, connect every configured server, and return their wrapped
+ * tools. Missing/invalid config or a dead server degrades to fewer tools —
+ * never throws into the tool-loading path. */
+export async function loadMcpTools(): Promise<Tool[]> {
+  if (!existsSync(CONFIG_PATH)) return [];
+  let cfg: McpConfig;
+  try {
+    cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as McpConfig;
+  } catch {
+    console.warn("mcp.json is not valid JSON — skipping external MCP tools.");
+    return [];
+  }
+  const servers = cfg.servers ?? {};
+  const out: Tool[] = [];
+  for (const [server, sc] of Object.entries(servers)) {
+    if (!sc || typeof sc.command !== "string" || !sc.command) {
+      console.warn("MCP server '" + server + "' has no command — skipped.");
+      continue;
+    }
+    try {
+      const client = await connect(sc);
+      openClients.push(client);
+      const listed = await client.listTools();
+      for (const remote of listed.tools ?? []) out.push(wrap(server, client, remote));
+    } catch (err) {
+      console.warn("MCP server '" + server + "' failed to connect (" + (err instanceof Error ? err.message : String(err)) + ") — its tools are unavailable.");
+    }
+  }
+  return out;
+}
+
+/** Close every open MCP client — call once on process exit. */
+export async function disconnectMcp(): Promise<void> {
+  for (const client of openClients.splice(0)) {
+    try { await client.close(); } catch { /* best-effort */ }
+  }
+}
+`;
+
 export const EXAMPLE_SKILL = (plan: HarnessPlan) => `---
 name: verify-before-done
 description: Verify claims with real command output before declaring a task done
