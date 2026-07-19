@@ -60,7 +60,7 @@ getState()    → current LoopState (messages, toolResults, phase)
 ```
 
 `src/loop/persistence.ts` snapshots `LoopState` to disk; `recoverLastLoop()` is read at TUI
-launch (`src/ui/index.tsx:45`) and handed to `App` as `resumeState`, which `App.tsx:127-137`
+launch (`src/ui/index.tsx:43-44`) and handed to `App` as `resumeState`, which `App.tsx:149-157`
 auto-resumes via `engine.resume(resumeState)` on mount — mid-task resume after a crash or
 interrupted run, not just a fresh session replay.
 

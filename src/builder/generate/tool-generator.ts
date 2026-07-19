@@ -176,9 +176,20 @@ export const GrepTool = {
     if (input.include) args.push("--glob", input.include);
     const child = spawn("rg", args, { stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
-    for await (const chunk of child.stdout) output += chunk;
-    const status = await new Promise<number>((resolve) => child.on("close", resolve));
-    return { data: output, content: status === 0 ? output : "No matches found." };
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => { output += chunk; });
+    child.stderr?.on("data", (chunk) => { stderr += chunk; });
+    const status = await new Promise<number | Error>((resolve) => {
+      child.on("error", (err) => resolve(err));
+      child.on("close", (code) => resolve(code ?? 0));
+    });
+    if (status instanceof Error) {
+      return { data: "", content: "ripgrep (rg) not found on PATH", isError: true };
+    }
+    if (status !== 0 && status !== 1) {
+      return { data: "", content: stderr || "grep failed", isError: true };
+    }
+    return { data: output, content: output || "No matches found." };
   },
 };
 `,
@@ -267,11 +278,11 @@ export const TestRunnerTool = {
   },
 };
 `,
-	docker: `import { exec } from "node:child_process";
+	docker: `import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const inputSchema = z.object({
   command: z.string().describe("Docker command (e.g. ps, build, run)"),
@@ -284,11 +295,19 @@ export const DockerTool = {
   inputSchema,
   isReadOnly: (input: { command: string }) => ["ps", "images", "info", "version"].includes(input.command),
   async call(input: { command: string; args: string }) {
-    const { stdout, stderr } = await execAsync(\`docker \${input.command} \${input.args}\`);
-    if (stderr) console.warn(stderr);
-    return { data: stdout, content: stdout || stderr };
+    // execFile with an argv array — no shell, so args can't inject via
+    // \`;\`/\`&&\`/backticks the way a shell-interpolated \`docker \${cmd} \${args}\` would.
+    const argv = [input.command, ...input.args.split(/\\s+/).filter(Boolean)];
+    try {
+      const { stdout, stderr } = await execFileAsync("docker", argv);
+      if (stderr) console.warn(stderr);
+      return { data: stdout, content: stdout || stderr };
+    } catch (e: unknown) {
+      const err = e as { message?: string; stdout?: string; stderr?: string };
+      return { error: err.message ?? String(e), content: err.stdout || err.stderr || String(e), isError: true };
+    }
   },
-});
+};
 `,
 	mcp: `import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

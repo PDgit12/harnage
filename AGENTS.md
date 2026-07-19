@@ -32,7 +32,7 @@ posting findings to the knitbrain team board:
 | `spec` | `src/builder/spec/**` | Intent parsing / project-context analysis |
 | `assemble` | `src/builder/assemble/**` | Harness template assembly + build verification |
 | `generate` | `src/builder/generate/**` | Deterministic tool/command file generators |
-| `tests` | tests domain (`tests` trigger) | `tests/*.test.ts` (23 files) |
+| `tests` | tests domain (`tests` trigger) | `tests/*.test.ts` (29 files) |
 | `scripts` | scripts domain (`scripts` trigger) | `scripts/*.ts` benchmarks (bench-profile, bench-editformat, bench-archetype, egress-check) |
 | `utils` | `src/utils/**` | Shared helpers |
 
