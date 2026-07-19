@@ -27,6 +27,53 @@ describe("generated harness TUI — slash commands", () => {
 	});
 
 	it("highlights the prompt when composing a command", () => {
-		expect(code).toContain('input.startsWith("/") ? "magenta" : "cyan"');
+		// command-mode → magenta; normal → brand ACCENT (post beauty-parity port)
+		expect(code).toContain('input.startsWith("/") ? "magenta" : ACCENT');
+	});
+});
+
+// TUI beauty parity (ported from reference src/ui/brand.ts + App.tsx): every
+// generated harness boots a branded banner showing its OWN name.
+describe("generated harness TUI — beauty parity banner", () => {
+	const plan = {
+		name: "nebula-agent",
+		description: "A `smart` file agent ${with} \"quotes\"",
+	} as HarnessPlan;
+	const code = GENERATED_TUI(plan);
+
+	it("bakes the harness's own name into the wordmark", () => {
+		expect(code).toContain('const WORDMARK = "nebula-agent"');
+	});
+
+	it("escapes a hostile description into a valid double-quoted TAGLINE", () => {
+		// JSON.stringify → backtick and ${ are inert inside double quotes, so the
+		// generated source stays valid (no outer-template-literal breakage)
+		expect(code).toContain(
+			'const TAGLINE = "A `smart` file agent ${with} \\"quotes\\""',
+		);
+	});
+
+	it("renders the accent, gradient wordmark, spinner, and Banner", () => {
+		expect(code).toContain('const ACCENT = "#22d3ee"');
+		expect(code).toContain("function wordmarkChars(");
+		expect(code).toContain("const SPINNER_FRAMES = [");
+		expect(code).toContain("function Banner(");
+		expect(code).toContain("<Banner config={config} profile={profile} />");
+	});
+
+	it("animates the spinner only while busy", () => {
+		expect(code).toContain("setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length)");
+		expect(code).toContain("<Text color={ACCENT}>{SPINNER_FRAMES[spinnerFrame]}</Text>");
+	});
+
+	it("colors the Agent label with the brand accent, not raw cyan", () => {
+		expect(code).toContain('<Text bold color={ACCENT}>Agent</Text>');
+		expect(code).not.toContain('<Text bold color="cyan">Agent</Text>');
+	});
+
+	it("uses no new deps — ink + react + chalk primitives only", () => {
+		expect(code).not.toContain("figlet");
+		expect(code).not.toContain("gradient-string");
+		expect(code).not.toContain("boxen");
 	});
 });
