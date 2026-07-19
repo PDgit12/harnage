@@ -22,7 +22,7 @@
   (Engine v3), 3-stage memory+skills+compaction, eval-in-loop, trace/LLMops command, session
   resume, permissions, sub-agent tool, Ink TUI — one template constant per subsystem, each
   written by `assembleAndVerify`.
-- 29 test files under `tests/` (not "8 suites" — see below).
+- 30 test files under `tests/` (not "8 suites" — see below).
 
 ---
 
@@ -50,7 +50,7 @@ and are used for internal profile tuning (per-model pass/latency), but there is 
 head-to-head run against Claude Code / Codex CLI / OpenCode.
 
 ### G5. CLAUDE.md test-runner claim is stale
-`CLAUDE.md` says "vitest, 8 suites"; `tests/` currently has 29 `*.test.ts` files. Not fixing here
+`CLAUDE.md` says "vitest, 8 suites"; `tests/` currently has 30 `*.test.ts` files. Not fixing here
 (CLAUDE.md is out of scope for this pass) — flagged for whoever owns that file next. See the
 docs-worker report for the proposed one-line fix.
 

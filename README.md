@@ -8,10 +8,11 @@ A good harness *amplifies* what a model can do — it doesn't automate the model
 Describe the agent you want; harnage builds you a fully-owned, Claude Code-level harness
 for it, tuned so even a small local model performs at its ceiling.
 
+[![npm](https://img.shields.io/badge/npm-harnage%400.1.0-cb3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/harnage)
 [![Runtime: Bun ≥1.1](https://img.shields.io/badge/runtime-bun%20%E2%89%A51.1-fbf0df?logo=bun&logoColor=black)](https://bun.sh)
-[![Tests: 191 passing](https://img.shields.io/badge/tests-191%20passing-brightgreen)](#development)
+[![Tests: 203 passing](https://img.shields.io/badge/tests-203%20passing-brightgreen)](#development)
 [![TypeScript 5](https://img.shields.io/badge/typescript-5-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Status: private preview](https://img.shields.io/badge/status-private%20preview-yellow)](#status)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 </div>
 
@@ -40,7 +41,7 @@ project that runs against your local Ollama model or your own API key.
 | **Eval-in-loop** | Deterministic quality checks on every run, optional LLM-as-judge, a `trace` command over the local audit log — terminal-first LLMops. |
 | **Session resume** | Transcripts survive restarts; an interrupted task is offered for continuation on next start. |
 | **Permissions + sandbox** | Path-rule policy (`~/.harnage/permissions.json`) plus a command/path-blocklist sandbox for bash. |
-| **MCP dual-mode** | Serves an MCP server (`--mcp`) *and* consumes external MCP servers — few tools in this space do both. |
+| **MCP dual-mode** | The `harnage` CLI serves an MCP server (`--mcp`) *and* consumes external MCP servers today. Generated harnesses can serve MCP; external-MCP consumption in generated harnesses is in progress. |
 | **Ink TUI** | Live slash-command menu, streaming output, plus a classic readline REPL fallback. |
 
 ## Install
@@ -51,29 +52,20 @@ npm i -g harnage        # or: bunx harnage@latest  (no install, run once)
 
 Requires [bun](https://bun.com) ≥ 1.1 on your `PATH` — the npm package ships TypeScript source and runs it via bun directly (no separate build step). Don't want bun installed? Grab a prebuilt binary (darwin-arm64, linux-x64) from the [GitHub releases](https://github.com/PDgit12/harnage/releases) page instead — download, `chmod +x`, and run it directly, no runtime needed.
 
-## Quick Start
-
-**Build from source** (works today):
+Building from source instead:
 
 ```bash
-# Prerequisites: bun ≥ 1.1 (plus Ollama, or an API key for OpenRouter/Anthropic/OpenAI)
-
 git clone https://github.com/PDgit12/harnage
 cd harnage
 bun install
 bun run build
-
-# Build your first harness
-./harnage init "an agent that reviews git diffs for bugs and posts a summary to Slack"
+./harnage init "..."
 ```
 
-**Coming soon** (target state — not published yet):
+## Quick Start
 
 ```bash
-npm i -g harnage              # once published to npm
-bunx harnage@latest           # run without installing
-curl -fsSL https://github.com/PDgit12/harnage/releases/latest/download/harnage-<os>-<arch> \
-  -o harnage && chmod +x harnage   # prebuilt binary, once a GitHub release is cut
+harnage init "an agent that reviews git diffs for bugs and posts a summary to Slack"
 ```
 
 The builder picks a build brain automatically (your configured API key, falling back to local
@@ -117,7 +109,7 @@ _Coming soon — asciinema/GIF walkthrough of `harnage init` → generated harne
 
 ```bash
 bun run typecheck   # tsc --noEmit
-bun run test        # vitest — 29 files, 191 tests passing
+bun run test        # vitest — 30 files, 203 tests passing
 bun run lint        # biome check src/
 bun run build       # compile binary
 ```
@@ -126,9 +118,10 @@ Generated harnesses must themselves pass `bun install && tsc --noEmit` — the b
 
 ## Status
 
-Working: builder end-to-end (API + local + offline paths), reference harness, MCP mode, all 9
-tools, path-rule permissions, memory, eval, TUI. `package.json` is currently `"private": true` —
-not yet published to npm, and no GitHub release/binary exists yet (both listed above as target
-state). No interactive permission-approval dialog and no OS-level sandbox container yet — bash
-is confined by a command/path blocklist, not a VM/container. In progress: broader field testing
-across models and platforms. Found something broken? Open an issue.
+Published: `harnage@0.1.0` on npm, MIT licensed, prebuilt binaries on GitHub releases. Working:
+builder end-to-end (API + local + offline paths), reference harness (including MCP-server-consumer
+mode), all 9 tools, path-rule permissions, memory, eval, TUI. In progress: external-MCP consumption
+in *generated* harnesses (the `harnage` CLI itself already consumes MCP servers). No interactive
+permission-approval dialog yet — a denied call surfaces as tool-result text the model adapts to.
+No OS-level sandbox container yet — bash is confined by a command/path blocklist, not a VM/container.
+Found something broken? Open an issue.
