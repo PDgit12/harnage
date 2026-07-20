@@ -7,8 +7,16 @@ export interface Command {
 	load: () => Promise<{ default: CommandHandler }>;
 }
 
+export interface CommandContext {
+	// false inside the Ink TUI: stdin is in raw mode for useInput, so a
+	// command must not open its own readline interface (it would hang
+	// forever waiting for input Ink never lets it see). true in the
+	// classic REPL, where readline.question() is safe.
+	interactive: boolean;
+}
+
 export interface LocalCommandHandler {
-	call: (args: string[], context: unknown) => Promise<{ value: string }>;
+	call: (args: string[], context: CommandContext) => Promise<{ value: string }>;
 }
 
 export type CommandHandler = LocalCommandHandler;
