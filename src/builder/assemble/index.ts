@@ -104,6 +104,23 @@ export async function assembleAndVerify(
 	// Copy-template for MCP consumption — opt-in, see DEPLOY.md.
 	await writeFile(join(outputDir, "mcp.json.example"), MCP_JSON_EXAMPLE);
 
+	// MCP server recommendation: if the user accepted the interactive prompt,
+	// write a real mcp.json; otherwise leave a discoverable note for later.
+	if (plan.mcpServersToWrite && Object.keys(plan.mcpServersToWrite).length) {
+		await writeFile(
+			join(outputDir, "mcp.json"),
+			JSON.stringify({ servers: plan.mcpServersToWrite }, null, 2),
+		);
+	} else if (plan.mcpRecommendations?.length) {
+		const note = plan.mcpRecommendations
+			.map((r) => `- **${r.name}** (\`${r.npmPackage}\`) — ${r.description}`)
+			.join("\n");
+		await writeFile(
+			join(outputDir, "DEPLOY.md"),
+			`${DEPLOY_MD_TEMPLATE(plan)}\n## Recommended MCP servers\n\nBased on this agent's description, these MCP servers might help — copy \`mcp.json.example\` to \`mcp.json\` and add the ones you want:\n\n${note}\n`,
+		);
+	}
+
 	// Harness subsystems: engine + compaction, permissions, skills, session, sub-agents
 	await writeFile(
 		join(srcDir, "profiles.ts"),

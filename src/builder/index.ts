@@ -10,6 +10,10 @@ import {
 	maxParamsForRam,
 	recommendModels,
 } from "./models/catalog";
+import {
+	type McpRecommendation,
+	recommendMcpServers,
+} from "./models/mcp-catalog";
 import type { StructuredSpec } from "./spec";
 import { parseIntent, validateAgentPrompt } from "./spec";
 import { analyzeProject } from "./spec/context";
@@ -26,6 +30,13 @@ export interface HarnessPlan {
 	defaultLocalModel?: string;
 	/** Per-model scaffold overrides baked into profiles.ts (keyed by model id). */
 	modelProfileOverrides?: Record<string, unknown>;
+	/** Keyword-matched MCP server suggestions — always computed, shown regardless of accept/decline. */
+	mcpRecommendations?: McpRecommendation[];
+	/** Servers the user opted into (interactive only) — written as a real mcp.json. */
+	mcpServersToWrite?: Record<
+		string,
+		{ command: string; args: string[]; env: Record<string, string> }
+	>;
 	/** Baked domain pipeline stages for the small-model tier (Engine v3). */
 	pipeline?: Array<{ name: string; instruction: string; tool?: string }>;
 	/** LLM-planned bespoke slash commands (code generated in the GENERATE stage). */
@@ -347,6 +358,31 @@ export async function buildHarness(
 			}
 		} catch {
 			/* offline or no ollama — generated harness keeps its generic default */
+		}
+	}
+
+	// MCP server recommendation — keyword-match the spec against the curated
+	// catalog. Interactive: ask before writing a real mcp.json. Non-interactive
+	// (or nothing matched/declined): never blocks — at most a DEPLOY.md note.
+	const mcpRecs = recommendMcpServers(`${plan.description} ${plan.name}`);
+	if (mcpRecs.length) {
+		plan.mcpRecommendations = mcpRecs;
+		if (options?.ask) {
+			const menu = mcpRecs
+				.map((r, i) => `  ${i + 1}) ${r.name}  ${r.description}`)
+				.join("\n");
+			const answer = await options.ask(
+				`This agent might benefit from these MCP servers:\n${menu}\n  Add to mcp.json? [y/N]`,
+				"n",
+			);
+			if (/^y(es)?$/i.test(answer.trim())) {
+				plan.mcpServersToWrite = Object.fromEntries(
+					mcpRecs.map((r) => [
+						r.name,
+						{ command: r.command, args: r.args, env: {} },
+					]),
+				);
+			}
 		}
 	}
 
