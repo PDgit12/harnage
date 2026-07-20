@@ -16,6 +16,7 @@ import {
 import chalk from "chalk";
 import { Command } from "commander";
 import { glob } from "glob";
+import pkg from "../package.json";
 import { repl } from "./repl";
 import { resolveMcpConfig } from "./services/mcp/config";
 import { buildSystemPrompt, DEFAULT_BLOCKS } from "./services/system-prompt";
@@ -120,7 +121,7 @@ async function startMcpServer(): Promise<void> {
 	};
 
 	const server = new Server(
-		{ name: "harnage", version: "0.1.0" },
+		{ name: "harnage", version: pkg.version },
 		{ capabilities: { tools: {}, resources: {}, prompts: {} } },
 	);
 
@@ -285,7 +286,7 @@ const program = new Command();
 program
 	.name("harnage")
 	.description("AI Model = Brain. Harness = Hands.")
-	.version("0.1.0")
+	.version(pkg.version)
 	.option("--mcp", "Run as MCP server instead of interactive REPL")
 	.option("--classic", "Use the classic readline REPL instead of the TUI")
 	.option("--resume", "Resume the last interrupted loop")
