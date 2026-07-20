@@ -1,7 +1,7 @@
 {
   "name": "harnage",
-  "version": "0.1.0",
-  "description": "Describe an agent — own a Claude Code-level harness that amplifies your work on any model, even local. harnage augments your work, it never just automates it.",
+  "version": "0.2.0",
+  "description": "Describe an agent — own a Claude Code-level harness that amplifies your work on any model, even local, and consumes any MCP server. harnage augments your work, it never just automates it.",
   "keywords": [
     "agent",
     "ai-agent",
