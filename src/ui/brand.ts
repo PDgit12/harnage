@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import pkg from "../../package.json";
 
 /**
  * Signature accent — single source of truth for the wordmark, prompts,
@@ -10,7 +11,7 @@ export const ACCENT = "#22d3ee";
 export const ACCENT_DIM = "#0e7490";
 export const WORDMARK = "harnage";
 export const TAGLINE = "AI Model = Brain · Harness = Hands";
-export const VERSION = "v0.1.0";
+export const VERSION = `v${pkg.version}`;
 
 const UNICODE_SPINNER_FRAMES = [
 	"⠋",
