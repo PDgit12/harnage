@@ -201,7 +201,7 @@ export async function repl(
 			try {
 				const mod = await matched.command.load();
 				const handler = mod.default as LocalCommandHandler;
-				const result = await handler.call(matched.args, {});
+				const result = await handler.call(matched.args, { interactive: true });
 				if (result.value === "EXIT_APP") {
 					rl.close();
 					return;

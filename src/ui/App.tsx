@@ -243,7 +243,7 @@ export function App({
 			try {
 				const mod = await matched.command.load();
 				const handler = mod.default as LocalCommandHandler;
-				const result = await handler.call(matched.args, {});
+				const result = await handler.call(matched.args, { interactive: false });
 				if (result.value === "EXIT_APP") {
 					exit();
 				} else if (result.value === "CLEAR_MESSAGES") {
