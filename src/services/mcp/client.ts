@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import pkg from "../../../package.json";
 import type { McpServerConfig } from "./config";
 
 interface ToolDefinition {
@@ -25,7 +26,7 @@ export class McpClientManager {
 						env: config.env,
 					});
 
-		const client = new Client({ name: "harnage", version: "0.1.0" });
+		const client = new Client({ name: "harnage", version: pkg.version });
 		await client.connect(transport);
 
 		const toolsResult = await client.listTools();
