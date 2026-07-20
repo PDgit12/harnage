@@ -13,6 +13,8 @@ import { getAllTools } from "./tools";
 import {
 	ACCENT,
 	chalkBadge,
+	divider,
+	GLYPHS,
 	gradientWordmark,
 	SPINNER_FRAMES,
 	TAGLINE,
@@ -24,8 +26,10 @@ const SPINNER = SPINNER_FRAMES;
 const accent = chalk.hex(ACCENT);
 
 function printBanner(config: ProviderConfig) {
-	console.log(`  ${accent("⚙")} ${gradientWordmark()}  ${chalk.dim(VERSION)}`);
-	console.log(chalk.dim("  ─────────────────────────────────────"));
+	console.log(
+		`  ${accent(GLYPHS.gear)} ${gradientWordmark()}  ${chalk.dim(VERSION)}`,
+	);
+	console.log(chalk.dim(`  ${divider()}`));
 	console.log(chalk.dim(`  ${TAGLINE}`));
 	console.log();
 	console.log(`  ${chalkBadge(`${config.type} · ${config.model}`)}`);
@@ -45,9 +49,10 @@ function printBanner(config: ProviderConfig) {
 function printStatus(config: ProviderConfig) {
 	const u = costTracker.getSessionUsage();
 	const c = u.cost > 0.1 ? chalk.red : chalk.yellow;
+	const r = GLYPHS.rule;
 	process.stdout.write(
 		chalk.dim(
-			`\u2500 model: ${config.model} \u2500 cost: ${c(`$${u.cost.toFixed(4)}`)} \u2500 tokens: ${(u.promptTokens + u.completionTokens).toLocaleString()}\n`,
+			`${r} model: ${config.model} ${r} cost: ${c(`$${u.cost.toFixed(4)}`)} ${r} tokens: ${(u.promptTokens + u.completionTokens).toLocaleString()}\n`,
 		),
 	);
 }
@@ -130,11 +135,11 @@ export async function repl(
 						process.stdout.write(formatInline(event.content ?? ""));
 					else if (event.type === "tool_use")
 						process.stdout.write(
-							`\n  ${chalk.dim("↳")} ${toolLabel(event.name, event.input ?? {})}\n`,
+							`\n  ${chalk.dim(GLYPHS.arrow)} ${toolLabel(event.name, event.input ?? {})}\n`,
 						);
 					else if (event.type === "error")
 						process.stdout.write(
-							`\n  ${chalk.red("✖")} ${event.content ?? "Error"}\n`,
+							`\n  ${chalk.red(GLYPHS.cross)} ${event.content ?? "Error"}\n`,
 						);
 				}
 				process.stdout.write("\n");
@@ -151,7 +156,7 @@ export async function repl(
 	} else if (unfinished) {
 		console.log(
 			chalk.dim(
-				`⏸ unfinished task from last session: "${unfinished.goal?.slice(0, 100) ?? "?"}" — restart with --resume to continue`,
+				`${GLYPHS.pause} unfinished task from last session: "${unfinished.goal?.slice(0, 100) ?? "?"}" — restart with --resume to continue`,
 			),
 		);
 	}
@@ -166,7 +171,7 @@ export async function repl(
 	const rl = readline.createInterface({
 		input: process.stdin,
 		output: process.stdout,
-		prompt: `${accent("❯")} `,
+		prompt: `${accent(GLYPHS.prompt)} `,
 		completer,
 	});
 
@@ -209,7 +214,9 @@ export async function repl(
 				}
 			} catch (err) {
 				console.log(
-					chalk.red(`  ✖ ${err instanceof Error ? err.message : String(err)}`),
+					chalk.red(
+						`  ${GLYPHS.cross} ${err instanceof Error ? err.message : String(err)}`,
+					),
 				);
 			}
 			rl.prompt();
@@ -284,7 +291,7 @@ export async function repl(
 							printedAgent = false;
 						}
 						process.stdout.write(
-							`\n  ${chalk.dim("\u21b3")} ${toolLabel(event.name, event.input ?? {})}`,
+							`\n  ${chalk.dim(GLYPHS.arrow)} ${toolLabel(event.name, event.input ?? {})}`,
 						);
 						toolOut = true;
 						startSpin();
@@ -292,7 +299,7 @@ export async function repl(
 					case "error":
 						stopSpin();
 						process.stdout.write(
-							`\n  ${chalk.red("\u2716")} ${event.content ?? "Error"}`,
+							`\n  ${chalk.red(GLYPHS.cross)} ${event.content ?? "Error"}`,
 						);
 						break;
 				}
@@ -300,7 +307,7 @@ export async function repl(
 		} catch (err) {
 			stopSpin();
 			process.stdout.write(
-				`\n  ${chalk.red(`\u2716 Error: ${err instanceof Error ? err.message : String(err)}`)}`,
+				`\n  ${chalk.red(`${GLYPHS.cross} Error: ${err instanceof Error ? err.message : String(err)}`)}`,
 			);
 		} finally {
 			stopSpin();
@@ -327,7 +334,7 @@ export async function repl(
 		const ct = after.completionTokens - before.completionTokens;
 		console.log(
 			chalk.dim(
-				`  \u2514 Cost: $${cost.toFixed(4)} \u00b7 ${pt.toLocaleString()} in / ${ct.toLocaleString()} out`,
+				`  ${GLYPHS.corner} Cost: $${cost.toFixed(4)} ${GLYPHS.bullet} ${pt.toLocaleString()} in / ${ct.toLocaleString()} out`,
 			),
 		);
 
