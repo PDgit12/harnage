@@ -2003,6 +2003,10 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   const busyRef = useRef(false);
   const messagesRef = useRef<Array<Record<string, unknown>> | undefined>(initialMessages);
   const [perm, setPerm] = useState<PermPrompt | null>(null);
+  // Guards against a double-resolve: two keypresses can land in the same render
+  // tick before setPerm(null) re-renders, both seeing the stale perm. Only the
+  // first decision counts (esc-during-prompt and rapid a/y/d included).
+  const permSettledRef = useRef(false);
 
   // Animate the busy spinner only while busy; clear the interval on idle.
   useEffect(() => {
@@ -2017,9 +2021,15 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
 
   useInput((inputCh, key) => {
     if (perm) {
-      if (inputCh === "a") { perm.resolve("allow"); setPerm(null); }
-      else if (inputCh === "y") { perm.resolve("always"); setPerm(null); }
-      else if (inputCh === "d" || key.escape) { perm.resolve("deny"); setPerm(null); }
+      const decide = (choice: "allow" | "deny" | "always") => {
+        if (permSettledRef.current) return; // first key wins; ignore the rest
+        permSettledRef.current = true;
+        perm.resolve(choice);
+        setPerm(null);
+      };
+      if (inputCh === "a") decide("allow");
+      else if (inputCh === "y") decide("always");
+      else if (inputCh === "d" || key.escape) decide("deny");
       return;
     }
     if (key.escape && !busyRef.current) exit();
@@ -2055,6 +2065,7 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
       },
       onPermissionRequest: (req) =>
         new Promise((resolve) => {
+          permSettledRef.current = false; // fresh prompt — re-arm the settle guard
           setPerm({ tool: req.tool, target: permTarget(req.input), reason: req.reason, resolve });
         }),
     };
