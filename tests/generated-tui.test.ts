@@ -77,3 +77,28 @@ describe("generated harness TUI — beauty parity banner", () => {
 		expect(code).not.toContain("boxen");
 	});
 });
+
+// UX/edge-case audit (parity with the harnage CLI pass).
+describe("generated harness TUI — edge-case hardening", () => {
+	const code = GENERATED_TUI({ name: "testagent" } as HarnessPlan);
+
+	it("resolves a permission prompt exactly once (rapid double-key / esc guard)", () => {
+		expect(code).toContain("const permSettledRef = useRef(false)");
+		expect(code).toContain("if (permSettledRef.current) return;");
+		expect(code).toContain("permSettledRef.current = true;");
+		// re-armed for each new prompt
+		expect(code).toContain("permSettledRef.current = false;");
+	});
+
+	it("ignores empty submits and submits while busy", () => {
+		expect(code).toContain("if (!trimmed || busyRef.current) return;");
+	});
+
+	it("only quits on esc when idle (esc mid-run does not abort the process)", () => {
+		expect(code).toContain("if (key.escape && !busyRef.current) exit();");
+	});
+
+	it("surfaces a provider/stream error instead of crashing the run loop", () => {
+		expect(code).toContain('push({ kind: "error", text: err instanceof Error ? err.message : String(err) });');
+	});
+});
