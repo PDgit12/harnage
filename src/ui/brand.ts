@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import pkg from "../../package.json";
 
 /**
  * Signature accent — single source of truth for the wordmark, prompts,
@@ -10,9 +11,9 @@ export const ACCENT = "#22d3ee";
 export const ACCENT_DIM = "#0e7490";
 export const WORDMARK = "harnage";
 export const TAGLINE = "AI Model = Brain · Harness = Hands";
-export const VERSION = "v0.1.0";
+export const VERSION = `v${pkg.version}`;
 
-export const SPINNER_FRAMES = [
+const UNICODE_SPINNER_FRAMES = [
 	"⠋",
 	"⠙",
 	"⠹",
@@ -24,6 +25,62 @@ export const SPINNER_FRAMES = [
 	"⠇",
 	"⠏",
 ];
+const ASCII_SPINNER_FRAMES = ["|", "/", "-", "\\"];
+
+/**
+ * Best-effort unicode-terminal detection (same heuristic as the
+ * `is-unicode-supported` package, hand-rolled to avoid a new dependency):
+ * Windows terminals need an explicit allowlist; everywhere else, only the
+ * bare Linux kernel console (TERM=linux) reliably lacks unicode glyph
+ * support, so assume support unless that's set.
+ */
+export function supportsUnicode(): boolean {
+	if (process.platform !== "win32") {
+		return process.env.TERM !== "linux";
+	}
+	return Boolean(
+		process.env.CI ||
+			process.env.WT_SESSION ||
+			process.env.TERM_PROGRAM === "vscode" ||
+			process.env.TERM === "xterm-256color",
+	);
+}
+
+export const SPINNER_FRAMES = supportsUnicode()
+	? UNICODE_SPINNER_FRAMES
+	: ASCII_SPINNER_FRAMES;
+
+/** Ink `borderStyle` for the banner/input boxes — "classic" is pure ASCII
+ * (+/-/|), for terminals without unicode box-drawing support. */
+export const BORDER_STYLE = supportsUnicode() ? "round" : "classic";
+
+/** Glyphs that fall back to plain ASCII on terminals without unicode
+ * support (bare Linux console, some Windows shells). */
+export const GLYPHS = supportsUnicode()
+	? {
+			gear: "⚙",
+			prompt: "❯",
+			arrow: "↳",
+			corner: "└",
+			cross: "✖",
+			pause: "⏸",
+			bullet: "·",
+			rule: "─",
+			modeReady: "⏵⏵",
+			check: "✓",
+		}
+	: {
+			gear: "*",
+			prompt: ">",
+			arrow: "->",
+			corner: "\\-",
+			cross: "x",
+			pause: "[paused]",
+			bullet: "-",
+			rule: "-",
+			modeReady: ">>",
+			check: "OK",
+		};
 
 function hexToRgb(hex: string): [number, number, number] {
 	const n = Number.parseInt(hex.slice(1), 16);
@@ -69,4 +126,10 @@ export function gradientWordmark(text: string = WORDMARK): string {
 /** "provider · model" badge, chip-styled with the accent as background. */
 export function chalkBadge(text: string): string {
 	return chalk.bgHex(ACCENT).black.bold(` ${text} `);
+}
+
+/** Horizontal rule for the classic REPL banner — box-drawing line on
+ * unicode terminals, plain dashes otherwise. */
+export function divider(width = 39): string {
+	return (supportsUnicode() ? "─" : "-").repeat(width);
 }
