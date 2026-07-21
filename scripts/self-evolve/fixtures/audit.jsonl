@@ -1,0 +1,24 @@
+{"kind":"run_start","goal":"summarize our earlier decision about the db schema","model":"gpt-oss-20b","tier":"small"}
+{"kind":"memory_recall","chars":180}
+{"kind":"eval","name":"non_empty_answer","pass":true,"detail":""}
+{"kind":"eval","name":"judge_quality","pass":false,"detail":"score 2/5 — answer is missing earlier context from the session"}
+{"kind":"run_end","model":"gpt-oss-20b","chars":420,"ms":1900}
+{"kind":"run_start","goal":"what did we agree the rate limit should be","model":"gpt-oss-20b","tier":"small"}
+{"kind":"memory_recall","chars":150}
+{"kind":"eval","name":"judge_quality","pass":false,"detail":"score 1/5 — missing earlier context, forgot the number we set"}
+{"kind":"eval","name":"prose_answer","pass":false,"detail":"answer was a raw json blob"}
+{"kind":"run_end","model":"gpt-oss-20b","chars":300,"ms":1500}
+{"kind":"run_start","goal":"continue the migration we discussed","model":"gpt-oss-20b","tier":"small"}
+{"kind":"eval","name":"judge_quality","pass":false,"detail":"score 2/5 — missing earlier context about which table"}
+{"kind":"eval","name":"used_tool_when_available","pass":false,"detail":"no tool touched despite a filesystem task"}
+{"kind":"run_end","model":"gpt-oss-20b","chars":510,"ms":2100}
+{"kind":"run_start","goal":"find the config value in the repo","model":"gpt-oss-20b","tier":"small"}
+{"kind":"eval","name":"used_tool_when_available","pass":false,"detail":"no tool touched — guessed the path instead"}
+{"kind":"run_end","model":"gpt-oss-20b","chars":260,"ms":1200}
+{"kind":"run_start","goal":"recall the owner of the billing service","model":"gpt-oss-20b","tier":"small"}
+{"kind":"eval","name":"judge_quality","pass":false,"detail":"score 2/5 — missing earlier context, dropped the owner fact"}
+{"kind":"eval","name":"used_tool_when_available","pass":false,"detail":"no tool touched on a lookup task"}
+{"kind":"run_end","model":"gpt-oss-20b","chars":390,"ms":1700}
+{"kind":"run_start","goal":"one off odd failure","model":"gpt-oss-20b","tier":"small"}
+{"kind":"eval","name":"completed_without_stop","pass":false,"detail":"transient network error mid-run"}
+{"kind":"run_end","model":"gpt-oss-20b","chars":80,"ms":400}

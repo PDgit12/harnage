@@ -1,0 +1,35 @@
+{
+  "$schema": "./editable-surface.schema.json",
+  "version": 1,
+  "docstring": "EDITABLE SURFACE — the ONLY file a self-evolve fixer may touch. Each knob is a named, bounded numeric constant that already lives in the generated harness engine (src/builder/assemble/harness-templates.ts). A fixer proposes a new `value` within [min,max]; nothing else in the repo is in-bounds. Changes are accepted only via the acceptance harness (full task suite, per-task, no regression + >=1 strict improvement) and never auto-merged. Adding/removing knobs, or touching any other file, is out of bounds by construction.",
+  "knobs": {
+    "memory.recallLimit": {
+      "value": 8,
+      "min": 1,
+      "max": 32,
+      "engineRef": "harness-templates.ts:MemoryStore.recall(query, limit = 8)",
+      "effect": "How many semantic facts + episodic events long-term recall returns. Too low drops facts needed across a long session (info loss); too high floods the context."
+    },
+    "loop.maxIterations": {
+      "value": 20,
+      "min": 4,
+      "max": 60,
+      "engineRef": "harness-templates.ts:CONFIG.maxIterations / StopController.check",
+      "effect": "Hard cap on tool-loop turns before the run is stopped. Too low truncates multi-step tasks; too high burns budget on stuck runs."
+    },
+    "context.keepRecent": {
+      "value": 6,
+      "min": 2,
+      "max": 24,
+      "engineRef": "harness-templates.ts:compactMessages keepRecent",
+      "effect": "Messages kept verbatim (un-summarized) at the tail during context compaction. Too low summarizes away recent detail; too high defeats compaction."
+    },
+    "tools.maxTools": {
+      "value": 8,
+      "min": 3,
+      "max": 24,
+      "engineRef": "harness-templates.ts:pickTools maxTools (ACI tool budget)",
+      "effect": "Cap on tools exposed to a small model. Too low hides the tool the task needs (forces guessing); too high overwhelms weak dispatch."
+    }
+  }
+}
