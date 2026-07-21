@@ -90,8 +90,15 @@ describe("generated harness TUI — edge-case hardening", () => {
 		expect(code).toContain("permSettledRef.current = false;");
 	});
 
-	it("ignores empty submits and submits while busy", () => {
-		expect(code).toContain("if (!trimmed || busyRef.current) return;");
+	it("ignores empty submits", () => {
+		expect(code).toContain("if (!trimmed) return;");
+	});
+
+	it("surfaces a busy-submit as an info line instead of silently dropping input", () => {
+		// data-loss visibility parity with the CLI: a mid-run submit (incl. a
+		// multi-line paste that submits per newline) must not vanish silently
+		expect(code).toContain("if (busyRef.current) {");
+		expect(code).toContain('"⏳ busy — finish the current run first. Not sent: " + trimmed.slice(0, 80)');
 	});
 
 	it("only quits on esc when idle (esc mid-run does not abort the process)", () => {
