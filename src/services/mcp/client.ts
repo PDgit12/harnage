@@ -64,6 +64,13 @@ export class McpClientManager {
 		this.toolsCache.delete(name);
 	}
 
+	/** Disconnect every currently connected server — for process shutdown. */
+	async disconnectAll(): Promise<void> {
+		for (const name of [...this.clients.keys()]) {
+			await this.disconnectServer(name);
+		}
+	}
+
 	getAvailableTools(): Array<{ server: string; tool: string }> {
 		const result: Array<{ server: string; tool: string }> = [];
 		for (const [server, tools] of this.toolsCache) {
