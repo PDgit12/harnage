@@ -27,6 +27,22 @@ describe("parseIntent tool inference (offline keyword path)", () => {
 		expect(spec.tools).toContain("web_fetch");
 	});
 
+	// audit suggestion (2026-07-21, after retracting a stale finding that this
+	// gap was unfixed): extend the trigger synonyms beyond the original set.
+	it("infers web_search from research/news/lookup prompts", () => {
+		expect(parseIntent("A daily news summarizer agent").tools).toContain(
+			"web_search",
+		);
+		expect(
+			parseIntent("An agent that can lookup company information").tools,
+		).toContain("web_search");
+	});
+
+	it("infers web_fetch from a monitor prompt", () => {
+		const spec = parseIntent("An agent that can monitor a webpage for changes");
+		expect(spec.tools).toContain("web_fetch");
+	});
+
 	it("does not add web tools to an unrelated prompt", () => {
 		const spec = parseIntent("A code review agent that checks pull requests");
 		expect(spec.tools).not.toContain("web_search");
