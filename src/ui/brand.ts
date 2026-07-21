@@ -33,8 +33,14 @@ const ASCII_SPINNER_FRAMES = ["|", "/", "-", "\\"];
  * Windows terminals need an explicit allowlist; everywhere else, only the
  * bare Linux kernel console (TERM=linux) reliably lacks unicode glyph
  * support, so assume support unless that's set.
+ *
+ * HARNAGE_ASCII=1 force-disables unicode regardless of the heuristic — same
+ * escape hatch name generated harnesses use (see chassis's harness-templates.ts),
+ * so one env var forces plain-ASCII rendering across both the reference CLI
+ * and every generated harness.
  */
 export function supportsUnicode(): boolean {
+	if (process.env.HARNAGE_ASCII) return false;
 	if (process.platform !== "win32") {
 		return process.env.TERM !== "linux";
 	}
