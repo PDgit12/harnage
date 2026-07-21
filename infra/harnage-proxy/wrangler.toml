@@ -1,0 +1,8 @@
+name = "harnage-proxy"
+main = "worker.ts"
+compatibility_date = "2026-01-01"
+
+# OMNIROUTE_URL is not secret (it's a URL, not a key) but keep it a secret
+# anyway for simplicity — one command sets both:
+#   wrangler secret put OMNIROUTE_URL
+#   wrangler secret put OMNIROUTE_API_KEY
