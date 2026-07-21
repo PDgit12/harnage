@@ -93,6 +93,16 @@ const ACCENT_DIM = "#0e7490";
 const HARNESS_NAME = ${JSON.stringify(plan.name)};
 const HARNESS_TAGLINE = ${JSON.stringify(plan.description)};
 
+// Opt-in ASCII glyph set for terminals without unicode support (TERM=dumb,
+// legacy Windows consoles, some CI log viewers). Colors still work — only
+// the box-drawing/unicode glyphs swap out.
+const ASCII_MODE = process.env.HARNAGE_ASCII === "1";
+const GLYPH_GEAR = ASCII_MODE ? "*" : "⚙";
+const GLYPH_PROMPT = ASCII_MODE ? ">" : "❯";
+const GLYPH_RULE = ASCII_MODE ? "-".repeat(37) : "─────────────────────────────────────";
+const GLYPH_DOT = ASCII_MODE ? "-" : "·";
+const GLYPH_DASH = ASCII_MODE ? "--" : "—";
+
 function hexToRgb(hex: string): [number, number, number] {
   const n = Number.parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -219,18 +229,18 @@ async function ensureConfig(): Promise<ProviderConfig> {
 }
 
 function showBanner(config: ProviderConfig): void {
-  console.log(\`  \${chalk.hex(ACCENT)("⚙")} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim("v0.1.0")}\`);
-  console.log(chalk.dim("  ─────────────────────────────────────"));
+  console.log(\`  \${chalk.hex(ACCENT)(GLYPH_GEAR)} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim("v0.1.0")}\`);
+  console.log(chalk.dim(\`  \${GLYPH_RULE}\`));
   console.log(chalk.dim(\`  \${HARNESS_TAGLINE}\`));
   console.log();
-  console.log(\`  \${chalkBadge(\`\${config.type} · \${config.model}\`)}\`);
+  console.log(\`  \${chalkBadge(\`\${config.type} \${GLYPH_DOT} \${config.model}\`)}\`);
   console.log();
   console.log(
     "  Type " +
       chalk.hex(ACCENT)("/help") +
-      chalk.dim(" for commands  ·  ") +
+      chalk.dim(\` for commands  \${GLYPH_DOT}  \`) +
       chalk.hex(ACCENT)("/exit") +
-      chalk.dim(" to quit  ·  or type a goal to run the agent"),
+      chalk.dim(\` to quit  \${GLYPH_DOT}  or type a goal to run the agent\`),
   );
   console.log();
 }
@@ -271,7 +281,7 @@ async function startRepl(resume = false): Promise<void> {
     const config = await ensureConfig();
     showBanner(config);
     const profile = resolveProfile(config.model, config.contextTokens);
-    console.log(chalk.dim(\`Scaffold: \${profile.tier} tier · \${profile.loop} loop · \${profile.toolCalling} dispatch · \${profile.maxTools} tools\\n\`));
+    console.log(chalk.dim(\`Scaffold: \${profile.tier} tier \${GLYPH_DOT} \${profile.loop} loop \${GLYPH_DOT} \${profile.toolCalling} dispatch \${GLYPH_DOT} \${profile.maxTools} tools\\n\`));
     const { getAllTools } = await import("./tools.ts");
     const tools = await getAllTools();
     tools.push(makeAgentTool(tools, { tools, providerConfig: config, profile }));
@@ -295,12 +305,12 @@ async function startRepl(resume = false): Promise<void> {
       // done=false on disk — surface it instead of silently starting fresh.
       const prev = loadSession();
       if (prev && prev.done === false && prev.goal) {
-        console.log(chalk.yellow(\`Unfinished task from last session: "\${prev.goal.slice(0, 120)}" — restart with --resume to continue it.\`));
+        console.log(chalk.yellow(\`Unfinished task from last session: "\${prev.goal.slice(0, 120)}" \${GLYPH_DASH} restart with --resume to continue it.\`));
       }
     }
 
     const rl = createInterface({ input: stdIn, output: stdOut });
-    rl.setPrompt(\`\${chalk.hex(ACCENT)("❯")} \`);
+    rl.setPrompt(\`\${chalk.hex(ACCENT)(GLYPH_PROMPT)} \`);
 
     // Mid-task resume: the saved session ended with an unfinished goal, so
     // continue it immediately — the transcript already holds all prior steps.
@@ -682,6 +692,8 @@ own concern; review \`command\`/\`args\` before adding one on a sovereign box.
 - \`HARNAGE_AUDIT=off\` — disable the audit trail (on by default).
 - \`HARNAGE_MEMORY=off\` — disable long-term memory reads/writes.
 - \`HARNAGE_JUDGE=on\` — add an LLM-as-judge score to each run's eval (costs a call).
+- \`HARNAGE_ASCII=1\` — swap the classic REPL's unicode glyphs (banner gear,
+  prompt arrow, rule) for plain ASCII, for terminals without unicode support.
 
 ## Evaluation & ops (LLMops, local)
 
