@@ -61,3 +61,5 @@ CLAUDE.local.md
 CLAUDE.md
 .claude/
 .claude-flow/
+.worktrees/
+.claude/orchestration/
