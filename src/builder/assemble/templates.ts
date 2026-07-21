@@ -11,6 +11,7 @@ function commentSafe(s: string): string {
 
 export const PACKAGE_JSON_TEMPLATE = (plan: HarnessPlan) => ({
 	name: plan.name,
+	version: "0.1.0",
 	module: "src/main.tsx",
 	type: "module",
 	private: true,
@@ -68,6 +69,7 @@ import { Command } from "commander";
 
 import { LoopEngine, type ProviderConfig } from "./engine.ts";
 import { disconnectMcp } from "./mcp-client.ts";
+import pkg from "../package.json";
 import { makeAgentTool } from "./subagent.ts";
 import { resolveProfile } from "./profiles.ts";
 import { loadSession } from "./session.ts";
@@ -229,7 +231,7 @@ async function ensureConfig(): Promise<ProviderConfig> {
 }
 
 function showBanner(config: ProviderConfig): void {
-  console.log(\`  \${chalk.hex(ACCENT)(GLYPH_GEAR)} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim("v0.1.0")}\`);
+  console.log(\`  \${chalk.hex(ACCENT)(GLYPH_GEAR)} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim(\`v\${pkg.version}\`)}\`);
   console.log(chalk.dim(\`  \${GLYPH_RULE}\`));
   console.log(chalk.dim(\`  \${HARNESS_TAGLINE}\`));
   console.log();
@@ -373,7 +375,7 @@ async function startMcpServer(): Promise<void> {
   const policy = loadPolicy();
   const ctx = { cwd: process.cwd(), env: process.env as Record<string, string | undefined>, permissions: { mode: policy.mode, rules: policy.rules }, sandbox: "none" };
 
-  const server = new Server({ name: "${plan.name}", version: "0.1.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "${plan.name}", version: pkg.version }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema.toJSONSchema?.() ?? t.inputSchema })),
   }));
@@ -397,7 +399,7 @@ async function startMcpServer(): Promise<void> {
 // ─── Entry ───────────────────────────────────────────────────────
 
 const program = new Command();
-program.name("${plan.name}").description(${JSON.stringify(plan.description)}).version("0.1.0").option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
+program.name("${plan.name}").description(${JSON.stringify(plan.description)}).version(pkg.version).option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
   if (opts.mcp) { await startMcpServer(); return; }
   if (!opts.classic && process.stdout.isTTY && process.stdin.isTTY) {
     await startTuiApp(Boolean(opts.resume));
@@ -520,6 +522,7 @@ export const TSCONFIG_TEMPLATE = {
 		skipLibCheck: true,
 		noEmit: true,
 		allowImportingTsExtensions: true,
+		resolveJsonModule: true,
 		jsx: "react-jsx",
 		paths: { "@/*": ["./src/*"] },
 	},

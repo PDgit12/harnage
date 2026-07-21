@@ -38,7 +38,8 @@ describe("banner/prompt parity with the reference harness's ACCENT system", () =
 	it("shows a provider·model badge chip using the accent background, replacing the old plain dim line", () => {
 		expect(code).toContain("function chalkBadge(");
 		expect(code).toContain("chalk.bgHex(ACCENT).black.bold(");
-		expect(code).toContain("chalkBadge(`${config.type} · ${config.model}`)");
+		// the separator is GLYPH_DOT (ASCII-fallback aware), not a raw "·" literal
+		expect(code).toContain("chalkBadge(`${config.type} ${GLYPH_DOT} ${config.model}`)");
 		expect(code).not.toContain('chalk.dim(`Provider: ${config.type} | Model: ${config.model}`)');
 	});
 
@@ -52,8 +53,9 @@ describe("banner/prompt parity with the reference harness's ACCENT system", () =
 		expect(banner).not.toContain("/init");
 	});
 
-	it("prompt arrow is the accent-colored ❯, matching the reference REPL, not a plain cyan >", () => {
-		expect(code).toContain('chalk.hex(ACCENT)("❯")');
+	it("prompt arrow is the accent-colored ❯ (GLYPH_PROMPT, ASCII-fallback aware), matching the reference REPL, not a plain cyan >", () => {
+		expect(code).toContain("chalk.hex(ACCENT)(GLYPH_PROMPT)");
+		expect(code).toContain('const GLYPH_PROMPT = ASCII_MODE ? ">" : "❯";');
 		expect(code).not.toContain('chalk.cyan("> ")');
 	});
 
