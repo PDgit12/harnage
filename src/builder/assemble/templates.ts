@@ -11,6 +11,7 @@ function commentSafe(s: string): string {
 
 export const PACKAGE_JSON_TEMPLATE = (plan: HarnessPlan) => ({
 	name: plan.name,
+	version: "0.1.0",
 	module: "src/main.tsx",
 	type: "module",
 	private: true,
@@ -68,6 +69,7 @@ import { Command } from "commander";
 
 import { LoopEngine, type ProviderConfig } from "./engine.ts";
 import { disconnectMcp } from "./mcp-client.ts";
+import pkg from "../package.json";
 import { makeAgentTool } from "./subagent.ts";
 import { resolveProfile } from "./profiles.ts";
 import { loadSession } from "./session.ts";
@@ -92,6 +94,16 @@ const ACCENT = "#22d3ee";
 const ACCENT_DIM = "#0e7490";
 const HARNESS_NAME = ${JSON.stringify(plan.name)};
 const HARNESS_TAGLINE = ${JSON.stringify(plan.description)};
+
+// Opt-in ASCII glyph set for terminals without unicode support (TERM=dumb,
+// legacy Windows consoles, some CI log viewers). Colors still work — only
+// the box-drawing/unicode glyphs swap out.
+const ASCII_MODE = process.env.HARNAGE_ASCII === "1";
+const GLYPH_GEAR = ASCII_MODE ? "*" : "⚙";
+const GLYPH_PROMPT = ASCII_MODE ? ">" : "❯";
+const GLYPH_RULE = ASCII_MODE ? "-".repeat(37) : "─────────────────────────────────────";
+const GLYPH_DOT = ASCII_MODE ? "-" : "·";
+const GLYPH_DASH = ASCII_MODE ? "--" : "—";
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -219,18 +231,18 @@ async function ensureConfig(): Promise<ProviderConfig> {
 }
 
 function showBanner(config: ProviderConfig): void {
-  console.log(\`  \${chalk.hex(ACCENT)("⚙")} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim("v0.1.0")}\`);
-  console.log(chalk.dim("  ─────────────────────────────────────"));
+  console.log(\`  \${chalk.hex(ACCENT)(GLYPH_GEAR)} \${gradientWordmark(HARNESS_NAME)}  \${chalk.dim(\`v\${pkg.version}\`)}\`);
+  console.log(chalk.dim(\`  \${GLYPH_RULE}\`));
   console.log(chalk.dim(\`  \${HARNESS_TAGLINE}\`));
   console.log();
-  console.log(\`  \${chalkBadge(\`\${config.type} · \${config.model}\`)}\`);
+  console.log(\`  \${chalkBadge(\`\${config.type} \${GLYPH_DOT} \${config.model}\`)}\`);
   console.log();
   console.log(
     "  Type " +
       chalk.hex(ACCENT)("/help") +
-      chalk.dim(" for commands  ·  ") +
+      chalk.dim(\` for commands  \${GLYPH_DOT}  \`) +
       chalk.hex(ACCENT)("/exit") +
-      chalk.dim(" to quit  ·  or type a goal to run the agent"),
+      chalk.dim(\` to quit  \${GLYPH_DOT}  or type a goal to run the agent\`),
   );
   console.log();
 }
@@ -271,7 +283,7 @@ async function startRepl(resume = false): Promise<void> {
     const config = await ensureConfig();
     showBanner(config);
     const profile = resolveProfile(config.model, config.contextTokens);
-    console.log(chalk.dim(\`Scaffold: \${profile.tier} tier · \${profile.loop} loop · \${profile.toolCalling} dispatch · \${profile.maxTools} tools\\n\`));
+    console.log(chalk.dim(\`Scaffold: \${profile.tier} tier \${GLYPH_DOT} \${profile.loop} loop \${GLYPH_DOT} \${profile.toolCalling} dispatch \${GLYPH_DOT} \${profile.maxTools} tools\\n\`));
     const { getAllTools } = await import("./tools.ts");
     const tools = await getAllTools();
     tools.push(makeAgentTool(tools, { tools, providerConfig: config, profile }));
@@ -295,12 +307,12 @@ async function startRepl(resume = false): Promise<void> {
       // done=false on disk — surface it instead of silently starting fresh.
       const prev = loadSession();
       if (prev && prev.done === false && prev.goal) {
-        console.log(chalk.yellow(\`Unfinished task from last session: "\${prev.goal.slice(0, 120)}" — restart with --resume to continue it.\`));
+        console.log(chalk.yellow(\`Unfinished task from last session: "\${prev.goal.slice(0, 120)}" \${GLYPH_DASH} restart with --resume to continue it.\`));
       }
     }
 
     const rl = createInterface({ input: stdIn, output: stdOut });
-    rl.setPrompt(\`\${chalk.hex(ACCENT)("❯")} \`);
+    rl.setPrompt(\`\${chalk.hex(ACCENT)(GLYPH_PROMPT)} \`);
 
     // Mid-task resume: the saved session ended with an unfinished goal, so
     // continue it immediately — the transcript already holds all prior steps.
@@ -363,7 +375,7 @@ async function startMcpServer(): Promise<void> {
   const policy = loadPolicy();
   const ctx = { cwd: process.cwd(), env: process.env as Record<string, string | undefined>, permissions: { mode: policy.mode, rules: policy.rules }, sandbox: "none" };
 
-  const server = new Server({ name: "${plan.name}", version: "0.1.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "${plan.name}", version: pkg.version }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema.toJSONSchema?.() ?? t.inputSchema })),
   }));
@@ -387,7 +399,7 @@ async function startMcpServer(): Promise<void> {
 // ─── Entry ───────────────────────────────────────────────────────
 
 const program = new Command();
-program.name("${plan.name}").description(${JSON.stringify(plan.description)}).version("0.1.0").option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
+program.name("${plan.name}").description(${JSON.stringify(plan.description)}).version(pkg.version).option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
   if (opts.mcp) { await startMcpServer(); return; }
   if (!opts.classic && process.stdout.isTTY && process.stdin.isTTY) {
     await startTuiApp(Boolean(opts.resume));
@@ -510,6 +522,7 @@ export const TSCONFIG_TEMPLATE = {
 		skipLibCheck: true,
 		noEmit: true,
 		allowImportingTsExtensions: true,
+		resolveJsonModule: true,
 		jsx: "react-jsx",
 		paths: { "@/*": ["./src/*"] },
 	},
@@ -682,6 +695,8 @@ own concern; review \`command\`/\`args\` before adding one on a sovereign box.
 - \`HARNAGE_AUDIT=off\` — disable the audit trail (on by default).
 - \`HARNAGE_MEMORY=off\` — disable long-term memory reads/writes.
 - \`HARNAGE_JUDGE=on\` — add an LLM-as-judge score to each run's eval (costs a call).
+- \`HARNAGE_ASCII=1\` — swap the classic REPL's unicode glyphs (banner gear,
+  prompt arrow, rule) for plain ASCII, for terminals without unicode support.
 
 ## Evaluation & ops (LLMops, local)
 
