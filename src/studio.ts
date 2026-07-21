@@ -6,7 +6,7 @@ import chalk from "chalk";
 import type { BuildOptions } from "./builder";
 import { buildHarness } from "./builder";
 import { createBuildProvider } from "./services/api/client";
-import { resolveProvider } from "./services/api/resolve";
+import { pickSharedProxyModel, resolveProvider } from "./services/api/resolve";
 
 /** Recursively list generated files (relative paths), skipping node_modules/.git. */
 function listFiles(dir: string, root = dir, out: string[] = []): string[] {
@@ -79,7 +79,7 @@ export async function studio(): Promise<void> {
 	let options: BuildOptions | undefined;
 	let brain = "offline chassis (no model API configured)";
 	try {
-		const cfg = await resolveProvider();
+		let cfg = await resolveProvider();
 		const reachable =
 			cfg.type !== "ollama" ||
 			(await fetch(`${cfg.baseUrl ?? "http://localhost:11434"}/api/tags`, {
@@ -88,15 +88,15 @@ export async function studio(): Promise<void> {
 				.then((r) => r.ok)
 				.catch(() => false));
 		if (reachable) {
-			options = {
-				provider: createBuildProvider(cfg),
-				ask: async (q, d) => {
-					const a = await ask(
-						`  ${chalk.cyan("?")} ${q} ${chalk.dim(`[${d}]`)} `,
-					);
-					return a || d;
-				},
+			const brainAsk = async (q: string, d: string) => {
+				const a = await ask(
+					`  ${chalk.cyan("?")} ${q} ${chalk.dim(`[${d}]`)} `,
+				);
+				return a || d;
 			};
+			// Shared build-brain tier only: offer the short vetted model choice.
+			cfg = await pickSharedProxyModel(cfg, brainAsk);
+			options = { provider: createBuildProvider(cfg), ask: brainAsk };
 			brain = `${cfg.type} · ${cfg.model}`;
 		}
 	} catch {

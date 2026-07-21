@@ -5,7 +5,10 @@ import type { BuildOptions } from "../../builder";
 import { buildHarness } from "../../builder";
 import type { CommandContext, LocalCommandHandler } from "../../commands";
 import { createProvider } from "../../services/api/client";
-import { resolveProvider } from "../../services/api/resolve";
+import {
+	pickSharedProxyModel,
+	resolveProvider,
+} from "../../services/api/resolve";
 
 const STEP_LABELS: Record<string, string> = {
 	analyzing: "Analyzing your request...",
@@ -22,10 +25,14 @@ async function runBuild(
 ): Promise<string> {
 	let options: BuildOptions | undefined;
 	try {
-		const config = await resolveProvider();
+		let config = await resolveProvider();
 		if (config.type === "ollama") {
 			config.contextTokens = config.contextTokens ?? 8192;
 		}
+		// Shared build-brain tier only: offer the short vetted model choice.
+		// No-op for every other provider, and a no-op whenever `ask` just
+		// returns its default (non-interactive callers above never block).
+		config = await pickSharedProxyModel(config, ask);
 		options = { provider: createProvider(config), ask };
 	} catch {
 		options = undefined;
