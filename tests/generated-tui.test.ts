@@ -77,3 +77,35 @@ describe("generated harness TUI — beauty parity banner", () => {
 		expect(code).not.toContain("boxen");
 	});
 });
+
+// UX/edge-case audit (parity with the harnage CLI pass).
+describe("generated harness TUI — edge-case hardening", () => {
+	const code = GENERATED_TUI({ name: "testagent" } as HarnessPlan);
+
+	it("resolves a permission prompt exactly once (rapid double-key / esc guard)", () => {
+		expect(code).toContain("const permSettledRef = useRef(false)");
+		expect(code).toContain("if (permSettledRef.current) return;");
+		expect(code).toContain("permSettledRef.current = true;");
+		// re-armed for each new prompt
+		expect(code).toContain("permSettledRef.current = false;");
+	});
+
+	it("ignores empty submits", () => {
+		expect(code).toContain("if (!trimmed) return;");
+	});
+
+	it("surfaces a busy-submit as an info line instead of silently dropping input", () => {
+		// data-loss visibility parity with the CLI: a mid-run submit (incl. a
+		// multi-line paste that submits per newline) must not vanish silently
+		expect(code).toContain("if (busyRef.current) {");
+		expect(code).toContain('"⏳ busy — finish the current run first. Not sent: " + trimmed.slice(0, 80)');
+	});
+
+	it("only quits on esc when idle (esc mid-run does not abort the process)", () => {
+		expect(code).toContain("if (key.escape && !busyRef.current) exit();");
+	});
+
+	it("surfaces a provider/stream error instead of crashing the run loop", () => {
+		expect(code).toContain('push({ kind: "error", text: err instanceof Error ? err.message : String(err) });');
+	});
+});

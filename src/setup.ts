@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
-import { gradientWordmark, TAGLINE, VERSION } from "./ui/brand";
+import { GLYPHS, gradientWordmark, TAGLINE, VERSION } from "./ui/brand";
 
 export interface ProviderConfig {
 	type: "anthropic" | "openai" | "ollama" | "openrouter";
@@ -24,7 +24,7 @@ const DEFAULT_MODELS: Record<string, string> = {
 export async function setupWizard(): Promise<ProviderConfig> {
 	const rl = createInterface({ input, output });
 
-	console.log(`⚙ ${gradientWordmark()}  ${chalk.dim(VERSION)}`);
+	console.log(`${GLYPHS.gear} ${gradientWordmark()}  ${chalk.dim(VERSION)}`);
 	console.log(chalk.dim(TAGLINE));
 	console.log(chalk.dim("Welcome! Let's set up your provider."));
 	console.log("");
@@ -89,7 +89,7 @@ export async function setupWizard(): Promise<ProviderConfig> {
 		JSON.stringify(config, null, 2),
 	);
 
-	console.log(chalk.green("✓ Configuration saved."));
+	console.log(chalk.green(`${GLYPHS.check} Configuration saved.`));
 
 	return config;
 }

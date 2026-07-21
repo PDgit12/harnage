@@ -1931,6 +1931,9 @@ interface PermPrompt { tool: string; target: string; reason: string; resolve: (c
 const ACCENT = "#22d3ee";
 const ACCENT_DIM = "#0e7490";
 const WORDMARK = ${JSON.stringify(plan.name)};
+// Scaffold version — a freshly generated harness is always 0.1.0. Keep this in
+// sync with the generated package.json / program.version("0.1.0") baked by the
+// assembler (single-source is a coordinated follow-up with cc-build).
 const VERSION = "v0.1.0";
 const TAGLINE = ${JSON.stringify((plan.description ?? "").slice(0, 72) || "your own custom agent harness")};
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -2003,6 +2006,10 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   const busyRef = useRef(false);
   const messagesRef = useRef<Array<Record<string, unknown>> | undefined>(initialMessages);
   const [perm, setPerm] = useState<PermPrompt | null>(null);
+  // Guards against a double-resolve: two keypresses can land in the same render
+  // tick before setPerm(null) re-renders, both seeing the stale perm. Only the
+  // first decision counts (esc-during-prompt and rapid a/y/d included).
+  const permSettledRef = useRef(false);
 
   // Animate the busy spinner only while busy; clear the interval on idle.
   useEffect(() => {
@@ -2017,9 +2024,15 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
 
   useInput((inputCh, key) => {
     if (perm) {
-      if (inputCh === "a") { perm.resolve("allow"); setPerm(null); }
-      else if (inputCh === "y") { perm.resolve("always"); setPerm(null); }
-      else if (inputCh === "d" || key.escape) { perm.resolve("deny"); setPerm(null); }
+      const decide = (choice: "allow" | "deny" | "always") => {
+        if (permSettledRef.current) return; // first key wins; ignore the rest
+        permSettledRef.current = true;
+        perm.resolve(choice);
+        setPerm(null);
+      };
+      if (inputCh === "a") decide("allow");
+      else if (inputCh === "y") decide("always");
+      else if (inputCh === "d" || key.escape) decide("deny");
       return;
     }
     if (key.escape && !busyRef.current) exit();
@@ -2055,6 +2068,7 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
       },
       onPermissionRequest: (req) =>
         new Promise((resolve) => {
+          permSettledRef.current = false; // fresh prompt — re-arm the settle guard
           setPerm({ tool: req.tool, target: permTarget(req.input), reason: req.reason, resolve });
         }),
     };
@@ -2110,10 +2124,17 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   const onSubmit = useCallback((value: string) => {
     const trimmed = value.trim();
     setInput("");
-    if (!trimmed || busyRef.current) return;
+    if (!trimmed) return;
+    if (busyRef.current) {
+      // Surface dropped input instead of silently discarding it — a multi-line
+      // paste submits once per newline (ink-text-input has no bracketed-paste),
+      // so mid-run submits are easy to hit. The run is still in flight; re-send.
+      push({ kind: "info", text: "⏳ busy — finish the current run first. Not sent: " + trimmed.slice(0, 80) });
+      return;
+    }
     if (trimmed.startsWith("/")) { void handleCommand(trimmed); return; }
     void runGoal(trimmed);
-  }, [runGoal, handleCommand]);
+  }, [runGoal, handleCommand, push]);
 
   // Live slash-command menu: as soon as the input starts with "/", surface the
   // matching commands so they are discoverable and highlighted, Claude Code-style.

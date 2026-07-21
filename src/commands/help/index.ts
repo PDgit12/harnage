@@ -1,11 +1,12 @@
 import chalk from "chalk";
+import pkg from "../../../package.json";
 import type { LocalCommandHandler } from "../../commands";
 import { COMMANDS } from "../../commands";
 
 const handler: LocalCommandHandler = {
 	async call(): Promise<{ value: string }> {
 		const lines: string[] = [];
-		lines.push(chalk.bold("harnage v0.2.0"));
+		lines.push(chalk.bold(`harnage v${pkg.version}`));
 		lines.push(chalk.dim("AI Model = Brain. Harness = Hands."));
 		lines.push(
 			chalk.dim(

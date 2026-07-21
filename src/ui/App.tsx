@@ -9,6 +9,8 @@ import type { LoopEngine } from "../loop/LoopEngine";
 import type { ProviderConfig } from "../services/api/client";
 import {
 	ACCENT,
+	BORDER_STYLE,
+	GLYPHS,
 	SPINNER_FRAMES,
 	TAGLINE,
 	VERSION,
@@ -43,13 +45,13 @@ function Banner({
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box
-				borderStyle="round"
+				borderStyle={BORDER_STYLE}
 				borderColor={ACCENT}
 				paddingLeft={1}
 				paddingRight={1}
 			>
 				<Text>
-					<Text color={ACCENT}>{"⚙ "}</Text>
+					<Text color={ACCENT}>{`${GLYPHS.gear} `}</Text>
 					{wordmarkChars().map(({ ch, color }, i) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length static wordmark, never reorders
 						<Text key={i} color={color} bold>
@@ -67,14 +69,14 @@ function Banner({
 					</Text>
 					<Text
 						dimColor
-					>{` ${config.model}${branch ? `  ·  ${branch}` : ""}`}</Text>
+					>{` ${config.model}${branch ? `  ${GLYPHS.bullet}  ${branch}` : ""}`}</Text>
 				</Text>
 			</Box>
 			<Box paddingLeft={1}>
 				<Text dimColor>
-					<Text color={ACCENT}>/init</Text> build a harness ·{" "}
-					<Text color={ACCENT}>/help</Text> all commands · or type a goal to run
-					the agent
+					<Text color={ACCENT}>/init</Text> build a harness {GLYPHS.bullet}{" "}
+					<Text color={ACCENT}>/help</Text> all commands {GLYPHS.bullet} or type
+					a goal to run the agent
 				</Text>
 			</Box>
 		</Box>
@@ -92,7 +94,7 @@ function toolLabel(name: string | undefined, input: unknown): string {
 					? o.pattern
 					: "";
 	const n = name ?? "Tool";
-	return preview ? `${n} · ${preview.slice(0, 80)}` : n;
+	return preview ? `${n} ${GLYPHS.bullet} ${preview.slice(0, 80)}` : n;
 }
 
 export function App({
@@ -109,7 +111,7 @@ export function App({
 			? [
 					{
 						kind: "info" as const,
-						text: `⏸ unfinished task from last session: "${unfinishedHint.slice(0, 100)}" — restart with --resume to continue`,
+						text: `${GLYPHS.pause} unfinished task from last session: "${unfinishedHint.slice(0, 100)}" — restart with --resume to continue`,
 					},
 				]
 			: []),
@@ -139,8 +141,13 @@ export function App({
 		setHistory((h) => [...h, item]);
 	}, []);
 
-	useInput((_, key) => {
+	useInput((char, key) => {
+		// Escape: quit when idle only (mid-run, it'd be too easy to lose an
+		// in-flight goal by accident). Ctrl-C: quit unconditionally, matching
+		// the classic REPL's SIGINT behavior — busy or not, it's the user's
+		// unambiguous "get me out" signal.
 		if (key.escape && !busyRef.current) exit();
+		if (key.ctrl && char === "c") exit();
 	});
 
 	const consumeStream = useCallback(
@@ -258,14 +265,24 @@ export function App({
 		(value: string) => {
 			const trimmed = value.trim();
 			setInput("");
-			if (!trimmed || busyRef.current) return;
+			if (!trimmed) return;
+			if (busyRef.current) {
+				// A fast Enter (or a multi-line paste, which submits per embedded
+				// newline) while the agent is mid-run would otherwise vanish
+				// silently — surface it instead of dropping it with no trace.
+				push({
+					kind: "info",
+					text: "Still working — try again once this run finishes.",
+				});
+				return;
+			}
 			if (trimmed.startsWith("/")) {
 				void handleCommand(trimmed);
 			} else {
 				void runGoal(trimmed);
 			}
 		},
-		[handleCommand, runGoal],
+		[handleCommand, runGoal, push],
 	);
 
 	// Live slash-command menu: surface + highlight matching commands as you type
@@ -298,8 +315,16 @@ export function App({
 								{item.text}
 							</Text>
 						)}
-						{item.kind === "tool" && <Text dimColor>↳ {item.label}</Text>}
-						{item.kind === "error" && <Text color="red">✖ {item.text}</Text>}
+						{item.kind === "tool" && (
+							<Text dimColor>
+								{GLYPHS.arrow} {item.label}
+							</Text>
+						)}
+						{item.kind === "error" && (
+							<Text color="red">
+								{GLYPHS.cross} {item.text}
+							</Text>
+						)}
 						{item.kind === "info" && <Text dimColor>{item.text}</Text>}
 					</Box>
 				)}
@@ -339,12 +364,14 @@ export function App({
 			)}
 
 			<Box
-				borderStyle="round"
+				borderStyle={BORDER_STYLE}
 				borderColor={input.startsWith("/") ? "magenta" : ACCENT}
 				paddingLeft={1}
 				paddingRight={1}
 			>
-				<Text color={input.startsWith("/") ? "magenta" : ACCENT}>{"❯ "}</Text>
+				<Text
+					color={input.startsWith("/") ? "magenta" : ACCENT}
+				>{`${GLYPHS.prompt} `}</Text>
 				<TextInput
 					value={input}
 					onChange={setInput}
@@ -355,8 +382,8 @@ export function App({
 
 			<Box paddingLeft={2} paddingRight={2} justifyContent="space-between">
 				<Text dimColor>
-					⏵⏵ {engineMode}{" "}
-					<Text dimColor>(esc to quit · /help for commands)</Text>
+					{GLYPHS.modeReady} {engineMode}{" "}
+					<Text dimColor>(esc/ctrl-c to quit · /help for commands)</Text>
 				</Text>
 				<Text dimColor>${cost.toFixed(4)}</Text>
 			</Box>

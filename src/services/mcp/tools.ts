@@ -5,6 +5,14 @@ import { resolveMcpConfig } from "./config";
 
 const mcpManager = new McpClientManager();
 
+/** The one real, connected manager instance — callers that need to disconnect
+ * on shutdown must use this, not construct a fresh McpClientManager (a new
+ * instance has an empty client map, so disconnecting it is a silent no-op
+ * and orphans the real stdio subprocess). */
+export function getMcpManager(): McpClientManager {
+	return mcpManager;
+}
+
 export async function loadMcpTools(): Promise<Tool[]> {
 	const config = await resolveMcpConfig();
 	if (!config.servers || Object.keys(config.servers).length === 0) return [];
