@@ -100,6 +100,16 @@ export const FileEditTool = {
   inputSchema,
   isReadOnly: () => false,
   async call(input: { path: string; oldString: string; newString: string; replaceAll?: boolean }) {
+    // An empty oldString "matches" between every character (split("").length
+    // - 1 = content.length - 1), which is >1 for anything non-trivial — the
+    // ambiguity guard below would normally catch that, but replaceAll:true
+    // bypasses it by design, so content.split("").join(newString) would
+    // interleave newString between every single character in the file.
+    // Live-observed: a small model emitted exactly this (oldString:"",
+    // replaceAll:true) — reject it outright rather than let it through.
+    if (input.oldString === "") {
+      return { error: "oldString must not be empty", content: "Error: oldString cannot be an empty string", isError: true };
+    }
     const content = await readFile(input.path, "utf-8");
     const n = countOccurrences(content, input.oldString);
     if (n === 0) {
