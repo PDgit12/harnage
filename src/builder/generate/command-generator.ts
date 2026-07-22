@@ -312,6 +312,67 @@ export async function call(_args: string[], _context: unknown): Promise<{ value:
   return { value: lines.join("\\n") };
 }
 `,
+	loop: `import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+// Explicit, discoverable entry point for an autonomous multi-step run: same
+// engine and safety rails (max iterations, cost ceiling) a plain goal already
+// uses, but with live step-by-step progress streamed to the console instead
+// of a silent wait for the final answer, and a clear signal that this is
+// meant to run unattended for a while — Ctrl+C stops it cleanly, --resume
+// picks it back up (session persistence is on by default, matching the main
+// REPL loop). Respects the SAME persisted permission policy as everything
+// else — set mode:"auto" in ~/.<name>/permissions.json for a fully unattended
+// run, or leave it at "default" to have risky calls denied outright (no UI to
+// escalate a permission prompt to from inside a command).
+export async function call(args: string[], _context: unknown): Promise<{ value: string }> {
+  const goal = args.join(" ").trim();
+  if (!goal) {
+    return {
+      value:
+        "Usage: /loop <goal>\\n\\n" +
+        "Runs an autonomous multi-step task under the harness's normal safety rails\\n" +
+        "(max iterations, cost ceiling). Progress streams live as it works.\\n" +
+        "Ctrl+C stops it cleanly; --resume picks up an interrupted run.\\n" +
+        "Tool calls are gated by the same permission policy as everything else —\\n" +
+        "set mode to \\"auto\\" in permissions.json for a fully unattended run.",
+    };
+  }
+
+  const [{ getAllTools }, { LoopEngine }, pkgMod] = await Promise.all([
+    import("../tools"),
+    import("../engine"),
+    import("../../package.json"),
+  ]);
+  const pkgName = (pkgMod as { name?: string }).name ?? (pkgMod as { default?: { name?: string } }).default?.name ?? "harness";
+
+  const configPath = join(homedir(), \`.\${pkgName}\`, "config.json");
+  let providerConfig: Record<string, unknown> = { type: "ollama", model: "llama3", baseUrl: "http://localhost:11434", maxTokens: 4096 };
+  if (existsSync(configPath)) {
+    try {
+      providerConfig = { ...providerConfig, ...JSON.parse(readFileSync(configPath, "utf-8")) };
+    } catch { /* fall back to defaults */ }
+  }
+
+  const tools = await getAllTools();
+  console.log("\\x1b[2mStarting autonomous loop — Ctrl+C stops cleanly, --resume picks it back up.\\x1b[0m\\n");
+
+  const engine = new LoopEngine({
+    tools,
+    providerConfig: providerConfig as never,
+    onEvent: (ev: { type: string; content?: string; toolName?: string; toolInput?: unknown }) => {
+      if (ev.type === "status") console.log(\`\\x1b[2m… \${ev.content}\\x1b[0m\`);
+      else if (ev.type === "text" && ev.content) process.stdout.write(ev.content);
+      else if (ev.type === "tool_use") console.log(\`\\n\\x1b[36m→ \${ev.toolName}\\x1b[0m \${JSON.stringify(ev.toolInput ?? {}).slice(0, 200)}\`);
+      else if (ev.type === "tool_done") console.log(\`\\x1b[32m✓ \${ev.toolName}\\x1b[0m\`);
+    },
+  });
+
+  const result = await engine.run(goal);
+  return { value: "\\n" + result };
+}
+`,
 };
 
 export async function generateCommandFiles(
@@ -375,5 +436,9 @@ export async function generateCommandFiles(
 			`${COMMAND_TEMPLATES.calibrate}\n`,
 		);
 		writtenCommands.add("calibrate");
+	}
+	if (!writtenCommands.has("loop")) {
+		await writeFile(join(cmdsDir, "loop.ts"), `${COMMAND_TEMPLATES.loop}\n`);
+		writtenCommands.add("loop");
 	}
 }
