@@ -1062,6 +1062,18 @@ const DECISION_RULES =
   'Example — to read a file, return exactly: ' +
   '{"action":"tool","tool":"file_read","args":{"path":"src/index.ts"}}';
 
+// isSmallTalk() already skips the domain pipeline's forced-procedure text, but
+// decisionSystem() was still sending DECISION_RULES's "you MUST use a tool"
+// unconditionally underneath it — a small model dutifully obeyed, grabbed
+// whatever tool matched its trained domain framing, and answered "hi" with a
+// lint report. The bypass has to reach the rules the model actually reads,
+// not just the pipeline instructions layered on top of them.
+const SMALLTALK_RULES =
+  'You act by returning ONE JSON object and nothing else. ' +
+  'To give your final answer: {"action":"final","answer":"<text>"}. ' +
+  'This message is small talk (a greeting, thanks, or a question about yourself) — ' +
+  'NOT a task. Reply directly with a short, friendly final answer. Do NOT use a tool.';
+
 // A final answer that asserts absence/failure. Small models emit these
 // prematurely (the #1 grounding error) — trust it only after a tool confirms.
 // No regex backslashes: this lives in a template literal. '.' covers n't/nt.
@@ -1542,12 +1554,13 @@ export class LoopEngine {
   /** Build the constrained-json system message for a decision turn. */
   private async decisionSystem(goal: string, toolList: string, stageInstruction?: string): Promise<string> {
     const base = (await this.loadSystemPrompt()).slice(0, this.profile.systemPromptBudget);
+    const smallTalk = this.isSmallTalk(goal);
     return [
       base,
       \`Goal: \${goal}\`,
       stageInstruction ? \`Current step: \${stageInstruction}\` : "",
-      DECISION_RULES,
-      \`Available tools:\\n\${toolList}\`,
+      smallTalk ? SMALLTALK_RULES : DECISION_RULES,
+      smallTalk ? "" : \`Available tools:\\n\${toolList}\`,
     ].filter(Boolean).join("\\n\\n");
   }
 
@@ -1636,7 +1649,7 @@ export class LoopEngine {
         if (!this.nudged) {
           this.nudged = true;
           this.messages.push({ role: "assistant", content: raw });
-          this.messages.push({ role: "user", content: DECISION_RULES });
+          this.messages.push({ role: "user", content: this.isSmallTalk(goal) ? SMALLTALK_RULES : DECISION_RULES });
           continue;
         }
         if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
