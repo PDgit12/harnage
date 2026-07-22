@@ -18,7 +18,6 @@ import { Command } from "commander";
 import { glob } from "glob";
 import pkg from "../package.json";
 import { repl } from "./repl";
-import { resolveMcpConfig } from "./services/mcp/config";
 import { buildSystemPrompt, DEFAULT_BLOCKS } from "./services/system-prompt";
 import { setupWizard } from "./setup";
 import type { ToolContext } from "./Tool";
@@ -99,24 +98,27 @@ async function startRepl(classic = false, resume = false): Promise<void> {
 }
 
 async function cleanup(): Promise<void> {
-	const mcpConfig = await resolveMcpConfig();
-	for (const [name] of Object.entries(mcpConfig.servers)) {
-		try {
-			const { McpClientManager } = await import("./services/mcp/client");
-			const mgr = new McpClientManager();
-			await mgr.disconnectServer(name);
-		} catch {
-			/* ignore */
-		}
+	// Must disconnect the real, already-connected manager — constructing a
+	// fresh McpClientManager here has an empty client map, so disconnecting
+	// it was a silent no-op that orphaned every real stdio MCP subprocess.
+	try {
+		const { getMcpManager } = await import("./services/mcp/tools");
+		await getMcpManager().disconnectAll();
+	} catch {
+		/* ignore */
 	}
 }
 
 async function startMcpServer(): Promise<void> {
 	const tools = await getAllTools();
+	// Honor the user's own ~/.harnage/permissions.json instead of hardcoding
+	// bypass — an MCP client connecting to this server must go through the
+	// same path-rule policy as the interactive loop, not silently ignore it.
+	const { loadPolicy } = await import("./permissions");
 	const toolCtx: ToolContext = {
 		cwd: process.cwd(),
 		env: process.env,
-		permissions: { mode: "bypass", rules: [] },
+		permissions: loadPolicy(),
 		sandbox: "none",
 	};
 
@@ -138,6 +140,25 @@ async function startMcpServer(): Promise<void> {
 	server.setRequestHandler(CallToolRequestSchema, async (req) => {
 		const tool = tools.find((t) => t.name === req.params.name);
 		if (!tool) throw new Error(`Unknown tool: ${req.params.name}`);
+		// Same gate as the interactive loop (src/loop/LoopEngine.ts): path
+		// rules take precedence, no matching rule falls through to the
+		// tool's own check.
+		const { ruleVerdict } = await import("./permissions");
+		const args = req.params.arguments ?? {};
+		const permResult =
+			ruleVerdict(toolCtx.permissions, tool.name, args) ??
+			(await tool.checkPermissions?.(args, toolCtx));
+		if (permResult && !permResult.allowed) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Permission denied: ${permResult.reason || "Not allowed"}`,
+					},
+				],
+				isError: true,
+			};
+		}
 		const result = await tool.call(req.params.arguments ?? {}, toolCtx);
 		return {
 			content: [

@@ -1885,6 +1885,7 @@ import { LoopEngine, type EngineConfig, type ProviderConfig } from "./engine.ts"
 import type { ModelProfile } from "./profiles.ts";
 import type { Skill } from "./skills.ts";
 import type { Tool } from "./Tool.ts";
+import pkg from "../package.json";
 
 type HistoryItem =
   | { kind: "user"; text: string }
@@ -1931,7 +1932,11 @@ interface PermPrompt { tool: string; target: string; reason: string; resolve: (c
 const ACCENT = "#22d3ee";
 const ACCENT_DIM = "#0e7490";
 const WORDMARK = ${JSON.stringify(plan.name)};
-const VERSION = "v0.1.0";
+// Single-source version: read the harness's OWN package.json (bundler
+// moduleResolution types the JSON import — no resolveJsonModule needed). The
+// cast + 0.1.0 fallback keeps it valid before a version field is added, so the
+// banner never drifts from the package once one is present.
+const VERSION = "v" + ((pkg as { version?: string }).version ?? "0.1.0");
 const TAGLINE = ${JSON.stringify((plan.description ?? "").slice(0, 72) || "your own custom agent harness")};
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -2121,10 +2126,17 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   const onSubmit = useCallback((value: string) => {
     const trimmed = value.trim();
     setInput("");
-    if (!trimmed || busyRef.current) return;
+    if (!trimmed) return;
+    if (busyRef.current) {
+      // Surface dropped input instead of silently discarding it — a multi-line
+      // paste submits once per newline (ink-text-input has no bracketed-paste),
+      // so mid-run submits are easy to hit. The run is still in flight; re-send.
+      push({ kind: "info", text: "⏳ busy — finish the current run first. Not sent: " + trimmed.slice(0, 80) });
+      return;
+    }
     if (trimmed.startsWith("/")) { void handleCommand(trimmed); return; }
     void runGoal(trimmed);
-  }, [runGoal, handleCommand]);
+  }, [runGoal, handleCommand, push]);
 
   // Live slash-command menu: as soon as the input starts with "/", surface the
   // matching commands so they are discoverable and highlighted, Claude Code-style.
