@@ -2207,6 +2207,30 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
       push({ kind: "info", text: "⏳ busy — finish the current run first. Not sent: " + trimmed.slice(0, 80) });
       return;
     }
+    if (/^\\/loop\\b/.test(trimmed)) {
+      // Intercepted before handleCommand's generic findCommand dispatch: the
+      // standalone commands/loop.ts module only ever gets an empty object as
+      // context (handleCommand passes no session state at all), so a run through
+      // that path starts a fresh transcript with no permission-escalation UI.
+      // runGoal already has everything /loop needs — messagesRef.current for
+      // continuity, live onEvent streaming, and the real interactive
+      // permission modal — so route straight to it instead of duplicating it.
+      const loopGoal = trimmed.replace(/^\\/loop\\s*/, "").trim();
+      if (!loopGoal) {
+        push({
+          kind: "info",
+          text: "Usage: /loop <goal> — runs an autonomous multi-step task under the normal safety rails, sharing this session's conversation. Ctrl+C/Esc exits once the current step finishes, it does not cancel mid-step.",
+        });
+      } else if (loopGoal.startsWith("-")) {
+        push({
+          kind: "info",
+          text: '"' + loopGoal + '" looks like a CLI flag, not a goal. To resume an interrupted run: exit and relaunch with bun start --resume',
+        });
+      } else {
+        void runGoal(loopGoal);
+      }
+      return;
+    }
     if (trimmed.startsWith("/")) { void handleCommand(trimmed); return; }
     void runGoal(trimmed);
   }, [runGoal, handleCommand, push]);

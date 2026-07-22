@@ -104,6 +104,9 @@ const GLYPH_PROMPT = ASCII_MODE ? ">" : "❯";
 const GLYPH_RULE = ASCII_MODE ? "-".repeat(37) : "─────────────────────────────────────";
 const GLYPH_DOT = ASCII_MODE ? "-" : "·";
 const GLYPH_DASH = ASCII_MODE ? "--" : "—";
+const GLYPH_ARROW = ASCII_MODE ? "->" : "→";
+const GLYPH_CHECK = ASCII_MODE ? "OK" : "✓";
+const GLYPH_ELLIPSIS_DOT = ASCII_MODE ? "..." : "…";
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -344,7 +347,52 @@ async function startRepl(resume = false): Promise<void> {
     rl.on("line", (line: string) => {
       pending = pending.then(async () => {
         const trimmed = line.trim();
-        if (trimmed.startsWith("/")) {
+        if (/^\\/loop\\b/.test(trimmed)) {
+          // Intercepted BEFORE the generic command dispatch below: the
+          // standalone commands/loop.ts module has no way to see or update
+          // this closure's initialMessages (command handlers only ever get
+          // {config}), so a run through that path always starts a fresh,
+          // disconnected transcript. Running it the same way a plain goal
+          // runs — same tools/config/skills/profile/initialMessages — gives
+          // /loop real continuity with the rest of this session, plus the
+          // same live streaming and correct config it already had.
+          const loopGoal = trimmed.replace(/^\\/loop\\s*/, "").trim();
+          if (!loopGoal) {
+            console.log(
+              chalk.yellow(
+                "Usage: /loop <goal>\\n\\nRuns an autonomous multi-step task under the harness's normal safety rails\\n(max iterations, cost ceiling), sharing this session's ongoing conversation.\\nProgress streams live as it works. Ctrl+C exits once the current step\\nfinishes " + GLYPH_DASH + " same as any other in-flight goal, it does NOT cancel mid-step.",
+              ),
+            );
+          } else if (loopGoal.startsWith("-")) {
+            console.log(
+              chalk.yellow(
+                "\\"" + loopGoal + "\\" looks like a CLI flag, not a goal " + GLYPH_DASH + " /loop doesn't take flags.\\nTo resume an interrupted run: exit this session and relaunch with\\n  bun start --resume",
+              ),
+            );
+          } else {
+            console.log(chalk.dim("Starting autonomous loop " + GLYPH_DASH + " live progress below.\\n"));
+            try {
+              const engine = new LoopEngine({
+                tools,
+                providerConfig: config,
+                skills,
+                initialMessages,
+                profile,
+                onEvent: (ev) => {
+                  if (ev.type === "status") console.log(chalk.dim(GLYPH_ELLIPSIS_DOT + " " + (ev.content ?? "")));
+                  else if (ev.type === "text" && ev.content) process.stdout.write(ev.content);
+                  else if (ev.type === "tool_use") console.log("\\n" + chalk.cyan(GLYPH_ARROW + " " + ev.toolName) + " " + JSON.stringify(ev.toolInput ?? {}).slice(0, 200));
+                  else if (ev.type === "tool_done") console.log(chalk.green(GLYPH_CHECK + " " + ev.toolName));
+                },
+              });
+              const result = await engine.run(loopGoal);
+              initialMessages = engine.getMessages();
+              console.log("\\n" + result);
+            } catch (e) {
+              console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
+            }
+          }
+        } else if (trimmed.startsWith("/")) {
           // A command handler (e.g. /config) may open its own readline
           // interface on the same stdin to prompt the user. Two interfaces
           // both listening to the same TTY both react to the same keystrokes
