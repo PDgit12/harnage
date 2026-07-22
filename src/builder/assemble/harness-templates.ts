@@ -87,7 +87,7 @@ function readCalibration(model: string): Partial<ModelProfile> | undefined {
     const p = join(homedir(), ".${harnessName}", "profile.json");
     if (!existsSync(p)) return undefined;
     const data = JSON.parse(readFileSync(p, "utf-8"));
-    if (data.model !== model || typeof data.profile !== "object" || data.profile === null) return undefined;
+    if (typeof data.model !== "string" || data.model.toLowerCase() !== model.toLowerCase() || typeof data.profile !== "object" || data.profile === null) return undefined;
     return data.profile as Partial<ModelProfile>;
   } catch {
     return undefined;
@@ -718,12 +718,31 @@ const openClients: McpClient[] = [];
 /** Tool names must satisfy the permission matcher (\\\\w-), so map anything else to "_". */
 function sanitize(s: string): string { return s.replace(/[^A-Za-z0-9_-]/g, "_"); }
 
+// A hung MCP subprocess (misbehaving server, wrong protocol, stalled stdio
+// proxy) must never be able to freeze the whole harness at startup — every
+// entry point (classic REPL, TUI, --mcp server mode) awaits loadMcpTools()
+// before it can do anything. A dead server should degrade to fewer tools,
+// same as a malformed mcp.json already does, not hang forever.
+const MCP_CONNECT_TIMEOUT_MS = 10000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(what + " timed out after " + ms + "ms")), ms);
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
 async function connect(cfg: McpServerConfig): Promise<McpClient> {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const transport = new StdioClientTransport({ command: cfg.command, args: cfg.args ?? [], env: cfg.env });
   const client = new Client({ name: ${JSON.stringify(plan.name + "-mcp-client")}, version: "0.1.0" }, { capabilities: {} });
-  await client.connect(transport);
+  try {
+    await withTimeout(client.connect(transport), MCP_CONNECT_TIMEOUT_MS, "MCP connect");
+  } catch (err) {
+    await transport.close?.().catch(() => {});
+    throw err;
+  }
   return client as unknown as McpClient;
 }
 
@@ -781,7 +800,7 @@ export async function loadMcpTools(): Promise<Tool[]> {
     try {
       const client = await connect(sc);
       openClients.push(client);
-      const listed = await client.listTools();
+      const listed = await withTimeout(client.listTools(), MCP_CONNECT_TIMEOUT_MS, "MCP listTools");
       for (const remote of listed.tools ?? []) out.push(wrap(server, client, remote));
     } catch (err) {
       console.warn("MCP server '" + server + "' failed to connect (" + (err instanceof Error ? err.message : String(err)) + ") — its tools are unavailable.");

@@ -20,7 +20,10 @@ export const COMMAND_TEMPLATES: Record<string, string> = {
   return { value: "\\x1b[2J\\x1b[H" };
 }
 `,
-	exit: `export async function call(_args: string[], _context: unknown): Promise<{ value: string }> {
+	exit: `import { disconnectMcp } from "../mcp-client.ts";
+
+export async function call(_args: string[], _context: unknown): Promise<{ value: string }> {
+  await disconnectMcp();
   process.exit(0);
   return { value: "" };
 }

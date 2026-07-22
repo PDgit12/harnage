@@ -333,22 +333,40 @@ async function startRepl(resume = false): Promise<void> {
     // reachable via piped/scripted input, not just an interactive fluke.
     let pending: Promise<void> = Promise.resolve();
 
+    // The module-level SIGINT handler (registered before pending exists) can't
+    // await it — a Ctrl+C during an in-flight response would kill the process
+    // mid-run, same failure class the "close" handler above already guards
+    // against, just reachable via a different signal. Replace it now that
+    // there's a promise to wait on.
+    process.removeAllListeners("SIGINT");
+    process.on("SIGINT", async () => { await pending; await disconnectMcp(); process.exit(0); });
+
     rl.on("line", (line: string) => {
       pending = pending.then(async () => {
         const trimmed = line.trim();
         if (trimmed.startsWith("/")) {
+          // A command handler (e.g. /config) may open its own readline
+          // interface on the same stdin to prompt the user. Two interfaces
+          // both listening to the same TTY both react to the same keystrokes
+          // — without pausing this outer one, the user's answer to a nested
+          // prompt also gets treated as a new agent goal by this handler,
+          // silently firing an extra LoopEngine.run() mid-wizard. Pause here,
+          // resume once the command (and any prompting it did) is done.
+          rl.pause();
           try {
             const { COMMANDS, findCommand } = await import("./commands.ts");
             const found = findCommand(trimmed);
             if (found) {
               const handler = await found.command.load();
-              const result = await handler.call(() => {}, { config }, found.args);
+              const result = await handler.call(found.args, { config });
               if (result.value) console.log(result.value);
             } else {
               console.log(chalk.yellow(\`Unknown command. Type /help.\`));
             }
           } catch (e) {
             console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
+          } finally {
+            rl.resume();
           }
         } else if (trimmed) {
           console.log(chalk.dim(\`[Processing: \${config.model}]\\n\`));
