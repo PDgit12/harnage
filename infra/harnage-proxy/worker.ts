@@ -80,7 +80,7 @@ export default {
 		}
 
 		const upstream = await fetch(
-			`${env.OMNIROUTE_URL.replace(/\/$/, "")}/v1/chat/completions`,
+			`${env.OMNIROUTE_URL.replace(/\/$/, "")}/api/v1/chat/completions`,
 			{
 				method: "POST",
 				headers: {

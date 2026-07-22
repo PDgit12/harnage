@@ -44,11 +44,28 @@ const COMMAND_TRIGGERS: [string[], string[]][] = [
 // these are additive (a prompt can trigger both).
 const TOOL_TRIGGERS: [string[], string[]][] = [
 	[
-		["search", "google", "browse the web", "internet search", "search engine"],
+		[
+			"search",
+			"google",
+			"browse the web",
+			"internet search",
+			"search engine",
+			"research",
+			"news",
+			"lookup",
+		],
 		["web_search"],
 	],
 	[
-		["fetch", "scrape", "crawl", "webpage", "web page", "download a page"],
+		[
+			"fetch",
+			"scrape",
+			"crawl",
+			"webpage",
+			"web page",
+			"download a page",
+			"monitor",
+		],
 		["web_fetch"],
 	],
 ];
