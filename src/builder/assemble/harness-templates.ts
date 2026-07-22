@@ -612,6 +612,17 @@ export interface SessionState {
   done?: boolean;
 }
 
+// A flat positional slice can cut between an assistant message's tool_calls
+// and its matching role:"tool" response(s) — both OpenAI-compatible and
+// Ollama endpoints reject a request where a "tool" message's tool_call_id has
+// no preceding tool_calls entry. Skip forward past any leading orphaned
+// "tool" messages left dangling by the cut, rather than truncating blind.
+function safeSlice(messages: Array<Record<string, unknown>>, max: number): Array<Record<string, unknown>> {
+  let start = Math.max(0, messages.length - max);
+  while (start < messages.length && messages[start]?.role === "tool") start++;
+  return messages.slice(start);
+}
+
 export async function saveSession(
   messages: Array<Record<string, unknown>>,
   meta?: { goal?: string; done?: boolean },
@@ -619,7 +630,7 @@ export async function saveSession(
   try {
     await mkdir(SESSION_DIR, { recursive: true });
     const state: SessionState = {
-      messages: messages.slice(-MAX_SAVED_MESSAGES),
+      messages: safeSlice(messages, MAX_SAVED_MESSAGES),
       savedAt: new Date().toISOString(),
       goal: meta?.goal,
       done: meta?.done ?? true,
@@ -1162,7 +1173,18 @@ export async function* streamProvider(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.apiKey) headers["Authorization"] = \`Bearer \${config.apiKey}\`;
 
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000) });
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000) });
+  } catch (err) {
+    // A rejected fetch (daemon not running, dropped connection, the 120s
+    // timeout above firing) must surface as a stream event, not an uncaught
+    // exception — an uncaught throw here poisons the classic REPL's chained
+    // "pending" promise (see startRepl in templates.ts), permanently
+    // bricking the session with no error ever shown to the user.
+    yield { type: "error", content: \`\${config.type} request failed: \${err instanceof Error ? err.message : String(err)}\` };
+    return;
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     yield { type: "error", content: \`\${config.type} \${res.status}: \${text.slice(0, 200)}\` };
@@ -1177,7 +1199,16 @@ export async function* streamProvider(
   const acc: Record<number, { id: string; name: string; args: string }> = {};
 
   while (true) {
-    const { done, value } = await reader.read();
+    let done: boolean;
+    let value: Uint8Array | undefined;
+    try {
+      ({ done, value } = await reader.read());
+    } catch (err) {
+      // A connection dropped mid-stream must surface as an error event too —
+      // same reasoning as the fetch() try/catch above.
+      yield { type: "error", content: \`\${config.type} stream failed: \${err instanceof Error ? err.message : String(err)}\` };
+      return;
+    }
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\\n");
