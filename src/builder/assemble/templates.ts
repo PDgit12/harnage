@@ -325,33 +325,48 @@ async function startRepl(resume = false): Promise<void> {
     }
     rl.prompt();
 
-    rl.on("line", async (line: string) => {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("/")) {
-        try {
-          const { COMMANDS, findCommand } = await import("./commands.ts");
-          const found = findCommand(trimmed);
-          if (found) {
-            const handler = await found.command.load();
-            const result = await handler.call(() => {}, { config }, found.args);
-            if (result.value) console.log(result.value);
-          } else {
-            console.log(chalk.yellow(\`Unknown command. Type /help.\`));
+    // readline's "close" event (EOF, Ctrl-D, or a piped stdin ending) fires
+    // independently of any in-flight async "line" handler — Node does not wait
+    // for async listeners before emitting the next event. Without tracking the
+    // in-flight promise, "close" would exit the process while a response
+    // (a real network round trip) is still running, silently dropping it —
+    // reachable via piped/scripted input, not just an interactive fluke.
+    let pending: Promise<void> = Promise.resolve();
+
+    rl.on("line", (line: string) => {
+      pending = pending.then(async () => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("/")) {
+          try {
+            const { COMMANDS, findCommand } = await import("./commands.ts");
+            const found = findCommand(trimmed);
+            if (found) {
+              const handler = await found.command.load();
+              const result = await handler.call(() => {}, { config }, found.args);
+              if (result.value) console.log(result.value);
+            } else {
+              console.log(chalk.yellow(\`Unknown command. Type /help.\`));
+            }
+          } catch (e) {
+            console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
           }
-        } catch (e) {
-          console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
+        } else if (trimmed) {
+          console.log(chalk.dim(\`[Processing: \${config.model}]\\n\`));
+          const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
+          const result = await engine.run(trimmed);
+          initialMessages = engine.getMessages();
+          console.log(result);
         }
-      } else if (trimmed) {
-        console.log(chalk.dim(\`[Processing: \${config.model}]\\n\`));
-        const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
-        const result = await engine.run(trimmed);
-        initialMessages = engine.getMessages();
-        console.log(result);
-      }
-      rl.prompt();
+        rl.prompt();
+      });
     });
 
-    rl.on("close", async () => { console.log("\\nGoodbye!"); await disconnectMcp(); process.exit(0); });
+    rl.on("close", async () => {
+      await pending;
+      console.log("\\nGoodbye!");
+      await disconnectMcp();
+      process.exit(0);
+    });
   } catch (e) {
     console.error(chalk.red(\`Fatal: \${e instanceof Error ? e.message : e}\`));
     await disconnectMcp();
