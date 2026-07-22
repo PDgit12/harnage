@@ -672,7 +672,7 @@ export const COMMANDS: Command[] = [
   { type: "local", name: "/config", description: "Configure provider", load: () => import("./commands/config.ts") },
   { type: "local", name: "/exit", description: "Exit the CLI", load: () => import("./commands/exit.ts") },
   { type: "local", name: "/calibrate", description: "Measure this model and pick its best loop/edit-format", load: () => import("./commands/calibrate.ts") },
-  { type: "local", name: "/loop", description: "Run an autonomous multi-step task with live progress (Ctrl+C to stop, --resume to continue)", load: () => import("./commands/loop.ts") },
+  { type: "local", name: "/loop", description: "Run an autonomous multi-step task with live progress (Ctrl+C/Esc cancels immediately)", load: () => import("./commands/loop.ts") },
 ${custom}
 ];
 
