@@ -2,7 +2,6 @@ export type LoopPhase =
 	| "planning"
 	| "executing"
 	| "verifying"
-	| "checking_goal"
 	| "adapting"
 	| "done"
 	| "failed";

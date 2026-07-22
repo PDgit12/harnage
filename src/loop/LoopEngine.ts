@@ -149,9 +149,6 @@ export class LoopEngine {
 				case "verifying":
 					yield* this.verify();
 					break;
-				case "checking_goal":
-					yield* this.checkGoal();
-					break;
 				case "adapting":
 					yield* this.adapt();
 					break;
@@ -359,13 +356,17 @@ export class LoopEngine {
 		this.state.phase = "verifying";
 	}
 
+	// Verification and goal-check used to be two sequential model calls after
+	// every tool execution — doubling latency on every task, most visibly on
+	// trivial single-tool-call turns where this pair of calls dominated total
+	// response time. They ask overlapping questions; one round trip covers
+	// both: check the tool results AND answer whether the goal is satisfied.
 	private async *verify(): AsyncGenerator<StreamEvent> {
 		const messages = [
 			...this.state.messages,
 			{
 				role: "user",
-				content:
-					"Verify that the tool results above are correct and complete. If there are errors or issues, note them specifically.",
+				content: `Verify that the tool results above are correct and complete. Note any errors or issues specifically.\n\nThen answer: has the original goal been fully satisfied?\n\nOriginal goal: ${this.state.goal}\n\nEnd your reply with a line starting with YES if the goal is completely satisfied, or NO if more work is needed.`,
 			},
 		];
 
@@ -399,46 +400,8 @@ export class LoopEngine {
 			this.failures.push(fullText);
 		}
 
-		this.state.phase = "checking_goal";
-	}
-
-	private async *checkGoal(): AsyncGenerator<StreamEvent> {
-		const messages = [
-			...this.state.messages,
-			{
-				role: "user",
-				content: `Has the original goal been fully satisfied?\n\nOriginal goal: ${this.state.goal}\n\nAnswer YES if the goal is completely satisfied, or NO if more work is needed. Explain your reasoning.`,
-			},
-		];
-
-		let fullText = "";
-
-		try {
-			for await (const event of this.runStream(messages, [])) {
-				switch (event.type) {
-					case "text":
-						fullText += event.content ?? "";
-						yield event;
-						break;
-					case "thinking":
-						yield event;
-						break;
-					case "error":
-						yield event;
-						this.state.phase = "failed";
-						return;
-				}
-			}
-		} catch (err) {
-			yield { type: "error", content: String(err) };
-			this.state.phase = "failed";
-			return;
-		}
-
-		this.state.messages.push({ role: "assistant", content: fullText });
-
 		// ponytail: simple YES/NO heuristic. Upgrade to structured output if needed.
-		if (/^yes\b/i.test(fullText.trim())) {
+		if (/^yes\b/im.test(fullText.trim())) {
 			this.state.phase = "done";
 			yield { type: "done" };
 		} else {
@@ -499,7 +462,7 @@ export class LoopEngine {
 			this.pendingToolCalls = calls;
 			this.state.phase = "executing";
 		} else {
-			this.state.phase = "checking_goal";
+			this.state.phase = "verifying";
 		}
 	}
 }

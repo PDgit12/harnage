@@ -57,14 +57,12 @@ const toolContext = {
 };
 
 describe("LoopEngine", () => {
-	it("basic flow: planning → executing → checking_goal → done", async () => {
+	it("basic flow: planning → executing → verifying → done", async () => {
 		const provider = createMockProvider([
 			[{ type: "tool_use", name: "echo", input: { text: "hi" }, id: "t1" }],
-			[{ type: "text", content: "verified" }],
-			[{ type: "text", content: "no, not done" }],
+			[{ type: "text", content: "results look fine so far.\nNO, more work needed" }],
 			[{ type: "tool_use", name: "echo", input: { text: "hi2" }, id: "t2" }],
-			[{ type: "text", content: "verified again" }],
-			[{ type: "text", content: "yes, goal satisfied" }],
+			[{ type: "text", content: "results verified.\nYES, goal satisfied" }],
 		]);
 
 		const engine = new LoopEngine({ provider, tools: mockTools, toolContext });
@@ -171,7 +169,7 @@ describe("Context compaction", () => {
 		const longState: LoopState = {
 			id: `compact-${Date.now()}`,
 			goal: "test compaction",
-			phase: "checking_goal",
+			phase: "verifying",
 			iteration: 0,
 			messages,
 			toolResults: [],
@@ -203,7 +201,7 @@ describe("Context compaction", () => {
 		const shortState: LoopState = {
 			id: `compact-short-${Date.now()}`,
 			goal: "test compaction",
-			phase: "checking_goal",
+			phase: "verifying",
 			iteration: 0,
 			messages: [{ role: "user", content: "small" }],
 			toolResults: [],
