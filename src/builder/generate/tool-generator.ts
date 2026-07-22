@@ -85,23 +85,38 @@ import { z } from "zod";
 
 const inputSchema = z.object({
   path: z.string().describe("Absolute path to the file"),
-  oldString: z.string().describe("Text to replace"),
+  oldString: z.string().describe("Text to replace (must match exactly)"),
   newString: z.string().describe("Replacement text"),
+  replaceAll: z.boolean().optional().describe("Replace all occurrences instead of requiring a unique match"),
 });
+
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
 
 export const FileEditTool = {
   name: "file_edit",
   description: "Edit a file with string replacement",
   inputSchema,
   isReadOnly: () => false,
-  async call(input: { path: string; oldString: string; newString: string }) {
+  async call(input: { path: string; oldString: string; newString: string; replaceAll?: boolean }) {
     const content = await readFile(input.path, "utf-8");
-    if (!content.includes(input.oldString)) {
-      return { error: "oldString not found in file", content: "Error: Pattern not found" };
+    const n = countOccurrences(content, input.oldString);
+    if (n === 0) {
+      return { error: "oldString not found in file", content: "Error: Pattern not found", isError: true };
     }
-    const result = content.replace(input.oldString, input.newString);
+    if (!input.replaceAll && n > 1) {
+      return {
+        error: \`Found \${n} occurrences of oldString — ambiguous which one to replace.\`,
+        content: \`Ambiguous: \${n} matches found. Use replaceAll:true, or include more surrounding context to make oldString unique.\`,
+        isError: true,
+      };
+    }
+    const result = input.replaceAll
+      ? content.split(input.oldString).join(input.newString)
+      : content.replace(input.oldString, input.newString);
     await writeFile(input.path, result);
-    return { data: { replaced: true }, content: "File updated." };
+    return { data: { replaced: n }, content: \`File updated (\${input.replaceAll ? n : 1} replacement(s)).\` };
   },
 };
 `,
@@ -331,7 +346,14 @@ export const MCPTool = {
         content: tools.map(t => \`  \${t.name}: \${t.description}\`).join("\\n"),
       };
     }
-    return { data: null, content: "Use 'mcp serve' as a CLI subcommand to start the MCP server." };
+    if (input.action === "serve") {
+      return { data: null, content: "Run 'bun start --mcp' as a CLI subcommand to start the MCP server — this tool cannot start it from inside the running process." };
+    }
+    return {
+      data: null,
+      content: "action 'call' is not implemented by this tool — connect to the MCP server via the client SDK instead of calling it through this tool.",
+      isError: true,
+    };
   },
 };
 `,
