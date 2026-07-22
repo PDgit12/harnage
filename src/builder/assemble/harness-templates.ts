@@ -1853,14 +1853,24 @@ export class LoopEngine {
     }
     if (choice === "always") {
       const target = targetOf(args);
+      // Scope to the immediate parent directory, never the top-level path
+      // segment: for an ABSOLUTE path (e.g. /etc/passwd, ~/.ssh/id_rsa —
+      // exactly what a permission prompt exists to gate), split("/")[0] is
+      // "", collapsing the glob to "/**" — a regex that matches every
+      // absolute path on the filesystem. dirname() keeps the grant scoped to
+      // where the approved file actually lives.
       const glob = !target
         ? "*"
         : name === "bash"
           ? target.split(/\\s+/)[0] + " *"
-          : target.split("/")[0] + "/**";
-      this.policy.rules.push({ pattern: name + "(" + glob + ")", allow: true });
+          : dirname(target) + "/**";
+      const pattern = name + "(" + glob + ")";
+      this.policy.rules.push({ pattern, allow: true });
       this.toolContext.permissions.rules = this.policy.rules;
       savePolicy(this.policy);
+      audit("permission_allow", { tool: name, target, mode: "always", pattern });
+    } else {
+      audit("permission_allow", { tool: name, target: targetOf(args), mode: "once" });
     }
     return { ok: true };
   }
