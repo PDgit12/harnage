@@ -53,6 +53,13 @@ describe("generated harness TUI — beauty parity banner", () => {
 		);
 	});
 
+	it("reads the version from the harness's own package.json (single source)", () => {
+		expect(code).toContain('import pkg from "../package.json"');
+		expect(code).toContain('const VERSION = "v" + ((pkg as { version?: string }).version ?? "0.1.0")');
+		// no drift-prone hardcoded version literal
+		expect(code).not.toContain('const VERSION = "v0.1.0"');
+	});
+
 	it("renders the accent, gradient wordmark, spinner, and Banner", () => {
 		expect(code).toContain('const ACCENT = "#22d3ee"');
 		expect(code).toContain("function wordmarkChars(");

@@ -1885,6 +1885,7 @@ import { LoopEngine, type EngineConfig, type ProviderConfig } from "./engine.ts"
 import type { ModelProfile } from "./profiles.ts";
 import type { Skill } from "./skills.ts";
 import type { Tool } from "./Tool.ts";
+import pkg from "../package.json";
 
 type HistoryItem =
   | { kind: "user"; text: string }
@@ -1931,10 +1932,11 @@ interface PermPrompt { tool: string; target: string; reason: string; resolve: (c
 const ACCENT = "#22d3ee";
 const ACCENT_DIM = "#0e7490";
 const WORDMARK = ${JSON.stringify(plan.name)};
-// Scaffold version — a freshly generated harness is always 0.1.0. Keep this in
-// sync with the generated package.json / program.version("0.1.0") baked by the
-// assembler (single-source is a coordinated follow-up with cc-build).
-const VERSION = "v0.1.0";
+// Single-source version: read the harness's OWN package.json (bundler
+// moduleResolution types the JSON import — no resolveJsonModule needed). The
+// cast + 0.1.0 fallback keeps it valid before a version field is added, so the
+// banner never drifts from the package once one is present.
+const VERSION = "v" + ((pkg as { version?: string }).version ?? "0.1.0");
 const TAGLINE = ${JSON.stringify((plan.description ?? "").slice(0, 72) || "your own custom agent harness")};
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
