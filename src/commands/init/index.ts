@@ -4,7 +4,7 @@ import chalk from "chalk";
 import type { BuildOptions } from "../../builder";
 import { buildHarness } from "../../builder";
 import type { CommandContext, LocalCommandHandler } from "../../commands";
-import { createProvider } from "../../services/api/client";
+import { createBuildProvider } from "../../services/api/client";
 import {
 	pickSharedProxyModel,
 	resolveProvider,
@@ -33,7 +33,11 @@ async function runBuild(
 		// No-op for every other provider, and a no-op whenever `ask` just
 		// returns its default (non-interactive callers above never block).
 		config = await pickSharedProxyModel(config, ask);
-		options = { provider: createProvider(config), ask };
+		// Build-brain resilience: retries across config.fallbackModels on a
+		// flaky/empty response (the shared OmniRoute proxy's free routes are
+		// best-effort). Plain createProvider silently dropped this everywhere
+		// except the top-level `harnage init` CLI action.
+		options = { provider: createBuildProvider(config), ask };
 	} catch {
 		options = undefined;
 	}
