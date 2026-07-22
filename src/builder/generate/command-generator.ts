@@ -319,24 +319,38 @@ import { join } from "node:path";
 // Explicit, discoverable entry point for an autonomous multi-step run: same
 // engine and safety rails (max iterations, cost ceiling) a plain goal already
 // uses, but with live step-by-step progress streamed to the console instead
-// of a silent wait for the final answer, and a clear signal that this is
-// meant to run unattended for a while — Ctrl+C stops it cleanly, --resume
-// picks it back up (session persistence is on by default, matching the main
-// REPL loop). Respects the SAME persisted permission policy as everything
-// else — set mode:"auto" in ~/.<name>/permissions.json for a fully unattended
-// run, or leave it at "default" to have risky calls denied outright (no UI to
-// escalate a permission prompt to from inside a command).
+// of a silent wait for the final answer. Respects the SAME persisted
+// permission policy as everything else — set mode:"auto" in
+// ~/.<name>/permissions.json for a fully unattended run, or leave it at
+// "default" to have risky calls denied outright (no UI to escalate a
+// permission prompt to from inside a command).
+//
+// KNOWN LIMITATION: this starts a fresh transcript, separate from whatever
+// you've already discussed in this session — it does not share or extend the
+// REPL's ongoing conversation (same trade-off /calibrate already makes for
+// its own throwaway runs). Run it as your first action if you want it to have
+// full context, or just accept a clean-slate autonomous task.
 export async function call(args: string[], _context: unknown): Promise<{ value: string }> {
   const goal = args.join(" ").trim();
-  if (!goal) {
+  const usage =
+    "Usage: /loop <goal>\\n\\n" +
+    "Runs an autonomous multi-step task under the harness's normal safety rails\\n" +
+    "(max iterations, cost ceiling). Progress streams live as it works.\\n" +
+    "Ctrl+C exits once the current step finishes — same as any other in-flight\\n" +
+    "goal, it does NOT cancel mid-step. Tool calls are gated by the same\\n" +
+    "permission policy as everything else — set mode to \\"auto\\" in\\n" +
+    "permissions.json for a fully unattended run.\\n\\n" +
+    "This starts a fresh transcript, separate from your current conversation.";
+  if (!goal) return { value: usage };
+  // "/loop --resume" is not a thing — --resume is a process-level CLI flag
+  // read once at startup, not something this command can act on. A model
+  // never sees this string; catch it before it's handed over as a fake goal.
+  if (goal.startsWith("-")) {
     return {
       value:
-        "Usage: /loop <goal>\\n\\n" +
-        "Runs an autonomous multi-step task under the harness's normal safety rails\\n" +
-        "(max iterations, cost ceiling). Progress streams live as it works.\\n" +
-        "Ctrl+C stops it cleanly; --resume picks up an interrupted run.\\n" +
-        "Tool calls are gated by the same permission policy as everything else —\\n" +
-        "set mode to \\"auto\\" in permissions.json for a fully unattended run.",
+        \`"\${goal}" looks like a CLI flag, not a goal — /loop doesn't take flags.\\n\` +
+        "To resume an interrupted run: exit this session and relaunch with\\n" +
+        "  bun start --resume",
     };
   }
 
@@ -347,6 +361,17 @@ export async function call(args: string[], _context: unknown): Promise<{ value: 
   ]);
   const pkgName = (pkgMod as { name?: string }).name ?? (pkgMod as { default?: { name?: string } }).default?.name ?? "harness";
 
+  // Mirrors resolveProviderConfig() in main.tsx: config.json never stores
+  // apiKey (deliberately, per ensureConfig's own "never persist apiKey to
+  // disk" comment) — it only ever lives in the env var. Re-deriving type/
+  // model/baseUrl from config.json but forgetting the env-var key would
+  // silently hand the engine a config with no credentials at all.
+  //
+  // Default to ollama, not openrouter: a harness running purely on local
+  // auto-detected models never writes config.json at all (this is the
+  // COMMON case, not the edge case) — defaulting to a remote provider here
+  // would wrongly demand an API key for a session that's working fine
+  // without one.
   const configPath = join(homedir(), \`.\${pkgName}\`, "config.json");
   let providerConfig: Record<string, unknown> = { type: "ollama", model: "llama3", baseUrl: "http://localhost:11434", maxTokens: 4096 };
   if (existsSync(configPath)) {
@@ -354,9 +379,21 @@ export async function call(args: string[], _context: unknown): Promise<{ value: 
       providerConfig = { ...providerConfig, ...JSON.parse(readFileSync(configPath, "utf-8")) };
     } catch { /* fall back to defaults */ }
   }
+  const envKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+  if (envKey) providerConfig.apiKey = envKey;
+  else if (providerConfig.type !== "ollama") {
+    // No key anywhere for a non-local provider — fail loud now instead of
+    // letting every provider call inside the loop fail with a confusing auth
+    // error, one iteration at a time, until the safety rails give up.
+    return {
+      value:
+        \`No API key found for provider "\${providerConfig.type}". Set OPENROUTER_API_KEY \` +
+        "or OPENAI_API_KEY, or switch to a local model with /model.",
+    };
+  }
 
   const tools = await getAllTools();
-  console.log("\\x1b[2mStarting autonomous loop — Ctrl+C stops cleanly, --resume picks it back up.\\x1b[0m\\n");
+  console.log("\\x1b[2mStarting autonomous loop — live progress below.\\x1b[0m\\n");
 
   const engine = new LoopEngine({
     tools,
@@ -375,6 +412,15 @@ export async function call(args: string[], _context: unknown): Promise<{ value: 
 `,
 };
 
+function normalizeCommandId(name: string): string {
+	return name
+		.toLowerCase()
+		.replace(/^\//, "")
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.slice(0, 30);
+}
+
 export async function generateCommandFiles(
 	plan: HarnessPlan,
 	outputDir: string,
@@ -383,6 +429,21 @@ export async function generateCommandFiles(
 	await mkdir(cmdsDir, { recursive: true });
 
 	const writtenCommands = new Set<string>();
+	// A build-brain-authored custom command (e.g. a domain "loop" step) takes
+	// priority over the generic reserved-name template of the same id — it's
+	// written separately, later, via extraFiles in assemble/index.ts, and
+	// would otherwise silently overwrite (or be silently overwritten by,
+	// depending on write order) whichever version force-writes here. Skip the
+	// generic one outright and say so, rather than let either clobber the
+	// other with no signal.
+	const customIds = new Set(
+		(plan.customCommands ?? []).map((c) => normalizeCommandId(c.name)),
+	);
+	if (customIds.has("loop")) {
+		console.warn(
+			"A custom command named 'loop' collides with the built-in autonomous-loop command — skipping the generic /loop, keeping the custom one.",
+		);
+	}
 
 	for (const cmd of plan.commands) {
 		const cleanName = cmd
@@ -437,7 +498,7 @@ export async function generateCommandFiles(
 		);
 		writtenCommands.add("calibrate");
 	}
-	if (!writtenCommands.has("loop")) {
+	if (!writtenCommands.has("loop") && !customIds.has("loop")) {
 		await writeFile(join(cmdsDir, "loop.ts"), `${COMMAND_TEMPLATES.loop}\n`);
 		writtenCommands.add("loop");
 	}

@@ -747,7 +747,7 @@ async function connect(cfg: McpServerConfig): Promise<McpClient> {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const transport = new StdioClientTransport({ command: cfg.command, args: cfg.args ?? [], env: cfg.env });
-  const client = new Client({ name: ${JSON.stringify(plan.name + "-mcp-client")}, version: "0.1.0" }, { capabilities: {} });
+  const client = new Client({ name: ${JSON.stringify(`${plan.name}-mcp-client`)}, version: "0.1.0" }, { capabilities: {} });
   try {
     await withTimeout(client.connect(transport), MCP_CONNECT_TIMEOUT_MS, "MCP connect");
   } catch (err) {
