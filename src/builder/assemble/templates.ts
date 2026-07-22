@@ -370,10 +370,20 @@ async function startRepl(resume = false): Promise<void> {
           }
         } else if (trimmed) {
           console.log(chalk.dim(\`[Processing: \${config.model}]\\n\`));
-          const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
-          const result = await engine.run(trimmed);
-          initialMessages = engine.getMessages();
-          console.log(result);
+          try {
+            const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
+            const result = await engine.run(trimmed);
+            initialMessages = engine.getMessages();
+            console.log(result);
+          } catch (e) {
+            // Without this catch, a thrown error here (a network failure that
+            // streamProvider itself doesn't already turn into an error event)
+            // would reject this "pending" promise permanently — every future
+            // line the user types re-chains onto that same rejected promise
+            // and its body never runs again, silently bricking the REPL for
+            // the rest of the process's life with no error ever shown.
+            console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
+          }
         }
         rl.prompt();
       });
@@ -426,6 +436,12 @@ async function startMcpServer(): Promise<void> {
     const result = await tool.call(parsed.data, ctx);
     return { content: [{ type: "text", text: result.content ?? JSON.stringify(result.data ?? "") }], isError: result.isError };
   });
+  // A parent MCP client normally disconnects by closing stdin (EOF), not by
+  // sending SIGINT — the module-level SIGINT handler above never fires for
+  // this path. Without this, any upstream MCP servers this harness itself
+  // proxies via mcp.json (loadMcpTools/openClients) are left running as
+  // orphaned subprocesses when the parent client exits normally.
+  process.stdin.on("end", async () => { await disconnectMcp(); process.exit(0); });
   await server.connect(new StdioServerTransport());
 }
 
