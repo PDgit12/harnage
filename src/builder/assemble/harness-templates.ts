@@ -1136,6 +1136,9 @@ export interface StreamOpts {
   format?: unknown;
   temperature?: number;
   repeatPenalty?: number;
+  /** External cancellation — Ctrl+C should abort the in-flight request
+   * immediately, not wait for it to finish on its own. */
+  signal?: AbortSignal;
 }
 
 export async function* streamProvider(
@@ -1173,15 +1176,24 @@ export async function* streamProvider(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.apiKey) headers["Authorization"] = \`Bearer \${config.apiKey}\`;
 
+  // AbortSignal.any combines the fixed timeout with an external cancellation
+  // signal (Ctrl+C during /loop or any run) — either firing aborts the
+  // request immediately, instead of Ctrl+C only exiting once the request
+  // finishes on its own.
+  const abortSignal = opts?.signal ? AbortSignal.any([AbortSignal.timeout(120000), opts.signal]) : AbortSignal.timeout(120000);
   let res: Response;
   try {
-    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000) });
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: abortSignal });
   } catch (err) {
     // A rejected fetch (daemon not running, dropped connection, the 120s
-    // timeout above firing) must surface as a stream event, not an uncaught
-    // exception — an uncaught throw here poisons the classic REPL's chained
-    // "pending" promise (see startRepl in templates.ts), permanently
-    // bricking the session with no error ever shown to the user.
+    // timeout above firing, or an external cancellation) must surface as a
+    // stream event, not an uncaught exception — an uncaught throw here
+    // poisons the classic REPL's chained "pending" promise (see startRepl in
+    // templates.ts), permanently bricking the session with no error shown.
+    if (opts?.signal?.aborted) {
+      yield { type: "error", content: "cancelled" };
+      return;
+    }
     yield { type: "error", content: \`\${config.type} request failed: \${err instanceof Error ? err.message : String(err)}\` };
     return;
   }
@@ -1306,6 +1318,17 @@ export class LoopEngine {
   // Long-term memory: on for top-level user sessions, off for sub-agents
   // (persistSession false) so spawned agents never pollute the durable store.
   private memory: MemoryStore | null = null;
+  // Real Ctrl+C cancellation: abort() fires this signal, which every
+  // streamProvider() call below passes through — the in-flight fetch/read
+  // aborts immediately instead of Ctrl+C only exiting once it finishes.
+  private abortController = new AbortController();
+
+  /** Cancel the in-flight run. The current streamProvider() call aborts
+   * immediately; run() surfaces this as a "failed" phase with a clear
+   * "cancelled" message rather than an uncaught exception. */
+  cancel(): void {
+    this.abortController.abort();
+  }
 
   constructor(config: EngineConfig) {
     this.tools = config.tools;
@@ -1374,7 +1397,7 @@ export class LoopEngine {
         if (process.env.HARNAGE_JUDGE === "on" || (CONFIG.judgeByDefault && process.env.HARNAGE_JUDGE !== "off")) {
           let raw = "";
           try {
-            for await (const e of streamProvider(this.config, judgeRequest(goal, result))) {
+            for await (const e of streamProvider(this.config, judgeRequest(goal, result), undefined, { signal: this.abortController.signal })) {
               if (e.type === "text") raw += e.content ?? "";
             }
           } catch { /* judge call failed — skip, keep deterministic evals */ }
@@ -1406,7 +1429,7 @@ export class LoopEngine {
     let raw = "";
     try {
       // Grammar-force valid JSON so weak models extract as reliably as strong ones.
-      for await (const e of streamProvider(this.config, req, undefined, { format: CONSOLIDATION_SCHEMA, temperature: 0 })) {
+      for await (const e of streamProvider(this.config, req, undefined, { format: CONSOLIDATION_SCHEMA, temperature: 0, signal: this.abortController.signal })) {
         if (e.type === "text") raw += e.content ?? "";
       }
     } catch {
@@ -1498,7 +1521,7 @@ export class LoopEngine {
           { role: "system", content: "Summarize this conversation concisely, preserving decisions, file paths, and open questions." },
           { role: "user", content: JSON.stringify(older).slice(0, 8000) },
         ];
-        for await (const e of streamProvider(this.config, req)) {
+        for await (const e of streamProvider(this.config, req, undefined, { signal: this.abortController.signal })) {
           if (e.type === "text") summary += e.content ?? "";
         }
         return summary || "(no summary)";
@@ -1526,7 +1549,7 @@ export class LoopEngine {
 
       const selected = selectTools(this.tools, goal, this.profile.maxTools);
       const toolDefs = toToolDefs(selected);
-      const decode = { temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty };
+      const decode = { temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty, signal: this.abortController.signal };
 
       let fullText = "";
       const calls: ToolUse[] = [];
@@ -1622,7 +1645,7 @@ export class LoopEngine {
     const msgs = [{ role: "system", content: sys }, ...this.messages, { role: "user", content: \`Goal: \${goal}\\n\\nDraft answer: \${rough}\\n\\nRewrite it as plain prose.\` }];
     let out = "";
     try {
-      for await (const e of streamProvider(this.config, msgs, undefined, { temperature: this.profile.temperature })) {
+      for await (const e of streamProvider(this.config, msgs, undefined, { temperature: this.profile.temperature, signal: this.abortController.signal })) {
         if (e.type === "text") out += e.content ?? "";
         if (e.type === "error") return rough;
       }
@@ -1650,7 +1673,7 @@ export class LoopEngine {
       const params = schema?.properties ? Object.keys(schema.properties).join(", ") : "";
       return \`- \${t.name}(\${params}): \${t.description}\`;
     }).join("\\n");
-    const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty };
+    const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty, signal: this.abortController.signal };
     let toolsUsed = 0;
     let actNudged = false;
     let verifyChecked = false;
@@ -2079,6 +2102,10 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
   const [busy, setBusy] = useState(false);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const busyRef = useRef(false);
+  // The currently in-flight engine, if any — lets Esc actually cancel a run
+  // (aborting the live provider request) instead of only being able to exit
+  // the app once the run finishes on its own.
+  const activeEngineRef = useRef<LoopEngine | null>(null);
   const messagesRef = useRef<Array<Record<string, unknown>> | undefined>(initialMessages);
   const [perm, setPerm] = useState<PermPrompt | null>(null);
   // Guards against a double-resolve: two keypresses can land in the same render
@@ -2110,7 +2137,10 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
       else if (inputCh === "d" || key.escape) decide("deny");
       return;
     }
-    if (key.escape && !busyRef.current) exit();
+    if (key.escape) {
+      if (busyRef.current) activeEngineRef.current?.cancel();
+      else exit();
+    }
   });
 
   const runGoal = useCallback(async (goal: string) => {
@@ -2148,6 +2178,7 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
         }),
     };
     const engine = new LoopEngine(engineConfig);
+    activeEngineRef.current = engine;
     try {
       const result = await engine.run(goal);
       if (current.trim() && !result.startsWith(current.slice(0, 20))) {
@@ -2158,6 +2189,7 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
     } catch (err) {
       push({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
+    activeEngineRef.current = null;
     messagesRef.current = engine.getMessages();
     setStreamingText("");
     setActiveTool(null);
@@ -2219,7 +2251,7 @@ export function App({ config, tools, skills, profile, initialMessages, resumeGoa
       if (!loopGoal) {
         push({
           kind: "info",
-          text: "Usage: /loop <goal> — runs an autonomous multi-step task under the normal safety rails, sharing this session's conversation. Ctrl+C/Esc exits once the current step finishes, it does not cancel mid-step.",
+          text: "Usage: /loop <goal> — runs an autonomous multi-step task under the normal safety rails, sharing this session's conversation. Esc cancels the in-flight step immediately.",
         });
       } else if (loopGoal.startsWith("-")) {
         push({

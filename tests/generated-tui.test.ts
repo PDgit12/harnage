@@ -108,8 +108,9 @@ describe("generated harness TUI — edge-case hardening", () => {
 		expect(code).toContain('"⏳ busy — finish the current run first. Not sent: " + trimmed.slice(0, 80)');
 	});
 
-	it("only quits on esc when idle (esc mid-run does not abort the process)", () => {
-		expect(code).toContain("if (key.escape && !busyRef.current) exit();");
+	it("esc cancels the in-flight run instead of aborting the process, and only quits when idle", () => {
+		expect(code).toContain("if (busyRef.current) activeEngineRef.current?.cancel();");
+		expect(code).toContain("else exit();");
 	});
 
 	it("surfaces a provider/stream error instead of crashing the run loop", () => {

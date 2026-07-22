@@ -335,14 +335,20 @@ async function startRepl(resume = false): Promise<void> {
     // (a real network round trip) is still running, silently dropping it —
     // reachable via piped/scripted input, not just an interactive fluke.
     let pending: Promise<void> = Promise.resolve();
+    // Tracks whichever LoopEngine is currently mid-run so Ctrl+C can actually
+    // cancel it — awaiting "pending" alone only waits for it to finish on its
+    // own, it doesn't stop anything in flight.
+    let activeEngine: LoopEngine | null = null;
 
     // The module-level SIGINT handler (registered before pending exists) can't
     // await it — a Ctrl+C during an in-flight response would kill the process
     // mid-run, same failure class the "close" handler above already guards
     // against, just reachable via a different signal. Replace it now that
-    // there's a promise to wait on.
+    // there's a promise to wait on. Cancel the active run FIRST — this aborts
+    // the in-flight provider request immediately, so "pending" resolves fast
+    // instead of the process appearing to hang until a long call finishes.
     process.removeAllListeners("SIGINT");
-    process.on("SIGINT", async () => { await pending; await disconnectMcp(); process.exit(0); });
+    process.on("SIGINT", async () => { activeEngine?.cancel(); await pending; await disconnectMcp(); process.exit(0); });
 
     rl.on("line", (line: string) => {
       pending = pending.then(async () => {
@@ -360,7 +366,7 @@ async function startRepl(resume = false): Promise<void> {
           if (!loopGoal) {
             console.log(
               chalk.yellow(
-                "Usage: /loop <goal>\\n\\nRuns an autonomous multi-step task under the harness's normal safety rails\\n(max iterations, cost ceiling), sharing this session's ongoing conversation.\\nProgress streams live as it works. Ctrl+C exits once the current step\\nfinishes " + GLYPH_DASH + " same as any other in-flight goal, it does NOT cancel mid-step.",
+                "Usage: /loop <goal>\\n\\nRuns an autonomous multi-step task under the harness's normal safety rails\\n(max iterations, cost ceiling), sharing this session's ongoing conversation.\\nProgress streams live as it works. Ctrl+C cancels the in-flight step\\nimmediately and exits.",
               ),
             );
           } else if (loopGoal.startsWith("-")) {
@@ -371,25 +377,28 @@ async function startRepl(resume = false): Promise<void> {
             );
           } else {
             console.log(chalk.dim("Starting autonomous loop " + GLYPH_DASH + " live progress below.\\n"));
+            const engine = new LoopEngine({
+              tools,
+              providerConfig: config,
+              skills,
+              initialMessages,
+              profile,
+              onEvent: (ev) => {
+                if (ev.type === "status") console.log(chalk.dim(GLYPH_ELLIPSIS_DOT + " " + (ev.content ?? "")));
+                else if (ev.type === "text" && ev.content) process.stdout.write(ev.content);
+                else if (ev.type === "tool_use") console.log("\\n" + chalk.cyan(GLYPH_ARROW + " " + ev.toolName) + " " + JSON.stringify(ev.toolInput ?? {}).slice(0, 200));
+                else if (ev.type === "tool_done") console.log(chalk.green(GLYPH_CHECK + " " + ev.toolName));
+              },
+            });
+            activeEngine = engine;
             try {
-              const engine = new LoopEngine({
-                tools,
-                providerConfig: config,
-                skills,
-                initialMessages,
-                profile,
-                onEvent: (ev) => {
-                  if (ev.type === "status") console.log(chalk.dim(GLYPH_ELLIPSIS_DOT + " " + (ev.content ?? "")));
-                  else if (ev.type === "text" && ev.content) process.stdout.write(ev.content);
-                  else if (ev.type === "tool_use") console.log("\\n" + chalk.cyan(GLYPH_ARROW + " " + ev.toolName) + " " + JSON.stringify(ev.toolInput ?? {}).slice(0, 200));
-                  else if (ev.type === "tool_done") console.log(chalk.green(GLYPH_CHECK + " " + ev.toolName));
-                },
-              });
               const result = await engine.run(loopGoal);
               initialMessages = engine.getMessages();
               console.log("\\n" + result);
             } catch (e) {
               console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
+            } finally {
+              activeEngine = null;
             }
           }
         } else if (trimmed.startsWith("/")) {
@@ -418,8 +427,9 @@ async function startRepl(resume = false): Promise<void> {
           }
         } else if (trimmed) {
           console.log(chalk.dim(\`[Processing: \${config.model}]\\n\`));
+          const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
+          activeEngine = engine;
           try {
-            const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
             const result = await engine.run(trimmed);
             initialMessages = engine.getMessages();
             console.log(result);
@@ -431,6 +441,8 @@ async function startRepl(resume = false): Promise<void> {
             // and its body never runs again, silently bricking the REPL for
             // the rest of the process's life with no error ever shown.
             console.log(chalk.red(\`Error: \${e instanceof Error ? e.message : e}\`));
+          } finally {
+            activeEngine = null;
           }
         }
         rl.prompt();
