@@ -126,12 +126,10 @@ export const FileWriteTool = {
   },
 };
 `,
-	glob: `import { readdir } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
+	glob: `import { z } from "zod";
 
 const inputSchema = z.object({
-  pattern: z.string().describe("Glob pattern to match"),
+  pattern: z.string().describe("Glob pattern to match (e.g. **/*.ts, src/**/*.md)"),
   path: z.string().optional().describe("Root directory"),
 });
 
@@ -141,19 +139,17 @@ export const GlobTool = {
   inputSchema,
   isReadOnly: () => true,
   async call(input: { pattern: string; path?: string }) {
-    const results: string[] = [];
-    async function walk(dir: string, depth = 0) {
-      if (depth > 5) return;
-      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-      for (const e of entries) {
-        const full = join(dir, e.name);
-        if (e.name.startsWith(".") || e.name === "node_modules") continue;
-        if (e.isDirectory()) await walk(full, depth + 1);
-        else results.push(full);
-      }
+    try {
+      const cwd = input.path ?? process.cwd();
+      const glob = new Bun.Glob(input.pattern);
+      const results = (await Array.fromAsync(glob.scan({ cwd }))).sort();
+      return { data: results, content: results.join("\\n") };
+    } catch (e) {
+      return {
+        content: \`Glob failed: \${e instanceof Error ? e.message : String(e)}\`,
+        isError: true,
+      };
     }
-    await walk(input.path ?? process.cwd());
-    return { data: results, content: results.join("\\n") };
   },
 };
 `,
