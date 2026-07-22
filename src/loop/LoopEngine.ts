@@ -255,6 +255,19 @@ export class LoopEngine {
 			return;
 		}
 
+		// A provider call that yields neither text nor a tool call is not a
+		// completed task — it's a silent failure (observed with flaky/empty
+		// upstream responses). Treating it as "done" hid the real problem
+		// behind an empty success. Surface it as an error instead.
+		if (calls.length === 0 && fullText.trim().length === 0) {
+			this.state.phase = "failed";
+			yield {
+				type: "error",
+				content: "provider returned no output (empty response)",
+			};
+			return;
+		}
+
 		this.state.messages.push({ role: "assistant", content: fullText });
 
 		if (calls.length > 0) {

@@ -78,6 +78,25 @@ describe("LoopEngine", () => {
 		expect(state.iteration).toBeGreaterThanOrEqual(2);
 		expect(state.toolResults.length).toBeGreaterThanOrEqual(2);
 	});
+
+	it("surfaces an error instead of silently completing when the provider returns no output", async () => {
+		// Regression test: a flaky upstream (e.g. an empty SSE stream with no
+		// text and no tool call) used to be silently treated as a completed
+		// task with an empty result — hiding a real provider failure.
+		const provider = createMockProvider([[]]);
+
+		const engine = new LoopEngine({ provider, tools: mockTools, toolContext });
+		const events: string[] = [];
+		for await (const ev of engine.run("test goal")) {
+			events.push(ev.type);
+		}
+
+		const state = engine.getState();
+		engineIds.push(state.id);
+
+		expect(state.phase).toBe("failed");
+		expect(events).toContain("error");
+	});
 });
 
 describe("SafetyMonitor - max iterations", () => {
