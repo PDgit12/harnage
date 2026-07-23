@@ -1,3 +1,4 @@
+import { builtinModules } from "node:module";
 import { z } from "zod";
 import type { Provider } from "../../services/api/client";
 import type { ProjectContext } from "../spec/context";
@@ -17,6 +18,47 @@ export function pascalCase(id: string): string {
 		id.charAt(0).toUpperCase() +
 		id.slice(1).replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
 	);
+}
+
+// Generated harnesses ship with a fixed package.json — a tool/command that
+// imports an undeclared package (observed: llama-3.3-70b emitting `import fetch
+// from "node-fetch"`, then dodging to the invented `node:fetch`) fails `tsc
+// --noEmit` with "Cannot find module", which the repair loop can't fix (the
+// package genuinely isn't installed / isn't a real module). Only zod, relative
+// imports, and REAL node: built-ins are allowed. Crucially `node:fetch` is not
+// a builtin — fetch is a global, no import — so validating the node: prefix
+// against the actual builtinModules list (not just the prefix) catches that
+// exact hallucination. Lists disallowed bare imports so the schema refine can
+// reject them and feed the reason back to the model for self-correction.
+const NODE_BUILTINS = new Set(builtinModules);
+
+function isRealNodeBuiltin(spec: string): boolean {
+	if (!spec.startsWith("node:")) return false;
+	// node:fs/promises → fs; the subpath doesn't change builtin-ness.
+	return NODE_BUILTINS.has(spec.slice(5).split("/")[0]);
+}
+
+export function disallowedImports(code: string): string[] {
+	const bad = new Set<string>();
+	const re = /(?:from|import|require\s*\()\s*["']([^"']+)["']/g;
+	let m: RegExpExecArray | null = re.exec(code);
+	while (m !== null) {
+		const spec = m[1];
+		if (
+			!spec.startsWith("./") &&
+			!spec.startsWith("../") &&
+			!isRealNodeBuiltin(spec) &&
+			spec !== "zod"
+		) {
+			bad.add(spec);
+		}
+		m = re.exec(code);
+	}
+	return [...bad];
+}
+
+function importRefineMessage(code: string): string {
+	return `These imports are not available: ${disallowedImports(code).join(", ")}. This harness ships a fixed package.json — only "zod", relative imports, and real node: built-ins (node:fs, node:path, node:child_process, node:os, node:crypto, …) work. For HTTP use the global fetch() with NO import at all — "node:fetch" is NOT a module (fetch is a global), and node-fetch/axios/got are not installed.`;
 }
 
 const EXAMPLE_TOOL = `import { z } from "zod";
@@ -81,6 +123,9 @@ export async function runGenerate(
 					.refine((c) => c.includes('from "zod"'), {
 						message:
 							'code must import { z } from "zod" and define a zod inputSchema',
+					})
+					.refine((c) => disallowedImports(c).length === 0, {
+						error: (iss) => importRefineMessage(iss.input as string),
 					}),
 			});
 
@@ -158,6 +203,9 @@ export async function runGenerateCommands(
 					.min(60)
 					.refine((c) => /export\s+async\s+function\s+call\s*\(/.test(c), {
 						message: "code must export: async function call(args, context)",
+					})
+					.refine((c) => disallowedImports(c).length === 0, {
+						error: (iss) => importRefineMessage(iss.input as string),
 					}),
 			});
 
