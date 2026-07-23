@@ -1,11 +1,9 @@
 import { execSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DEFAULT_BLOCKS, generateSystemMd } from "../../services/system-prompt";
 import { generateCommandFiles } from "../generate/command-generator";
 import { generateToolFiles } from "../generate/tool-generator";
 import type { HarnessPlan } from "../index";
-import type { StructuredSpec } from "../spec";
 import type { ProjectContext } from "../spec/context";
 import {
 	ENGINE_TEMPLATE,
@@ -71,7 +69,7 @@ export const BASE_FILES: Array<{
 export async function assembleAndVerify(
 	plan: HarnessPlan,
 	outputDir: string,
-	context?: ProjectContext,
+	_context?: ProjectContext,
 	extraFiles?: Array<{ path: string; code: string }>,
 ): Promise<BuildResult> {
 	const errors: string[] = [];
@@ -157,12 +155,13 @@ export async function assembleAndVerify(
 	}
 
 	// The plan's system prompt IS the agent's identity — write it where the
-	// generated engine loads it (cwd/.<name>/system.md). Tool-discipline rule
-	// appended: small local models narrate tool use unless told not to.
+	// generated engine loads it (cwd/.<name>/system.md). buildAgentSystemPrompt
+	// already includes the "act, don't narrate" tool-discipline rules, so no
+	// suffix is appended here (it would just waste the small-tier char budget).
 	await mkdir(join(outputDir, `.${plan.name}`), { recursive: true });
 	await writeFile(
 		join(outputDir, `.${plan.name}`, "system.md"),
-		`${plan.systemPrompt}\n\n## Tool discipline\nYou have real tools. NEVER describe or announce what you will do — emit the function call immediately. Text responses are ONLY for final answers or questions to the user. When the user gives you a path or task, act on it with a tool call in the same turn.\n`,
+		`${plan.systemPrompt}\n`,
 	);
 
 	await generateToolFiles(plan, srcDir);
@@ -176,18 +175,11 @@ export async function assembleAndVerify(
 		await writeFile(abs, f.code);
 	}
 
-	if (context) {
-		const displayName = plan.description.replace(/[.,!?;:].*$/, "").trim();
-		const spec: StructuredSpec = {
-			name: displayName,
-			purpose: plan.description,
-			tools: plan.tools,
-			commands: plan.commands,
-			language: [],
-			models: ["ollama"],
-		};
-		await generateSystemMd(outputDir, DEFAULT_BLOCKS, spec, context);
-	}
+	// Note: system.md is written once above (.<plan.name>/system.md from
+	// plan.systemPrompt = buildAgentSystemPrompt). The old second write here
+	// (generateSystemMd → .harnage/system.md with DEFAULT_BLOCKS) produced a
+	// duplicate file with WRONG tool names that the engine never loaded first
+	// anyway — removed.
 
 	const verify = await verifyBuild(outputDir);
 	errors.push(...verify.errors);

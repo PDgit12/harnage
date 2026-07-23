@@ -124,7 +124,10 @@ export const CorePlanSchema = z.object({
 	description: z.string().max(80),
 	tools: z.array(z.string()).min(1),
 	commands: z.array(z.string()),
-	systemPrompt: z.string().min(50),
+	// The agent system prompt is now composed deterministically from the plan
+	// (see buildAgentSystemPrompt) rather than free-written by the build model,
+	// so this is optional and ignored if present — kept for backward compat.
+	systemPrompt: z.string().optional(),
 	hasMcp: z.boolean(),
 	config: z
 		.object({
