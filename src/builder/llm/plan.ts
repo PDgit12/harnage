@@ -1,8 +1,5 @@
 import type { Provider } from "../../services/api/client";
-import {
-	buildSystemPrompt,
-	DEFAULT_BLOCKS,
-} from "../../services/system-prompt";
+import { buildAgentSystemPrompt } from "../../services/system-prompt";
 import type { HarnessPlan } from "../index";
 import type { ProjectContext } from "../spec/context";
 import { completeJSON } from "./client";
@@ -29,7 +26,6 @@ const CORE_EXAMPLE = `{
   "description": "Reviews TypeScript pull requests",
   "tools": ["bash", "file_read", "grep", "glob"],
   "commands": ["help", "clear", "review"],
-  "systemPrompt": "You are a code review agent. Review TypeScript pull requests for bugs, style, and security. Use your tools to read files, search code, and run checks. Verify claims by running commands. Report findings concisely with file:line references.",
   "hasMcp": false,
   "config": { "maxIterations": 20, "memory": true, "eval": true, "judgeByDefault": false }
 }`;
@@ -66,7 +62,6 @@ ${JSON.stringify(spec, null, 2)}
 Constraints:
 - tools must be chosen from: ${KNOWN_TOOLS.join(", ")}
 - name: lowercase kebab-case, max 30 chars
-- systemPrompt: write the COMPLETE system prompt the generated agent will run with — identity, goal, tool-usage rules, safety rules, output style. Ground it in the purpose${spec.domainKnowledge ? " and domainKnowledge" : ""}, name the domain concretely, and reference the actual tools by name so the identity is specific to THIS agent.
 - config: pick sane per-domain chassis knobs (maxIterations 1-100, memory/eval booleans, judgeByDefault).
 Example output:
 ${CORE_EXAMPLE}
@@ -92,15 +87,17 @@ Respond with ONLY a JSON object in that shape.`;
 		),
 	];
 	const providers = [...new Set(spec.models)];
-	const systemPrompt =
-		core.systemPrompt.trim().length >= 50
-			? core.systemPrompt
-			: buildSystemPrompt(DEFAULT_BLOCKS, {
-					name,
-					description: spec.purpose,
-					tools,
-					commands,
-				});
+	// Compose the system prompt from the REAL plan data (correct tool names,
+	// domain-grounded, grounding rules) instead of trusting the build model's
+	// free-written core.systemPrompt — that freeform prompt was the single
+	// biggest source of generic/flaky generated agents. The harness provides
+	// the structure; the model only ever contributed purpose/domainKnowledge.
+	const systemPrompt = buildAgentSystemPrompt({
+		name,
+		purpose: spec.purpose,
+		domainKnowledge: spec.domainKnowledge,
+		tools,
+	});
 	const config = {
 		maxIterations: clampInt(core.config?.maxIterations, 1, 100, 20),
 		memory: core.config?.memory ?? true,

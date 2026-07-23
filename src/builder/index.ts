@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Provider } from "../services/api/client";
-import { buildSystemPrompt, DEFAULT_BLOCKS } from "../services/system-prompt";
+import { buildAgentSystemPrompt } from "../services/system-prompt";
 import type { BuildResult } from "./assemble";
 import { assembleAndVerify } from "./assemble";
 import type { AskFn } from "./llm/interview";
@@ -121,11 +121,15 @@ export function generatePlan(spec: StructuredSpec): HarnessPlan {
 		tools: spec.tools,
 		commands: [...new Set(commands)],
 		providers,
-		systemPrompt: buildSystemPrompt(DEFAULT_BLOCKS, {
+		// Even the offline keyword fallback gets the correct, domain-grounded
+		// system prompt with REAL tool names — not DEFAULT_BLOCKS, whose tool
+		// reference lists names (read/write/GlobTool) that don't exist in a
+		// generated harness. This path runs whenever the build brain is
+		// unavailable or rate-limited, so it must not produce slop either.
+		systemPrompt: buildAgentSystemPrompt({
 			name,
-			description: spec.purpose,
+			purpose: spec.purpose,
 			tools: spec.tools,
-			commands: spec.commands,
 		}),
 		hasMcp,
 	};
