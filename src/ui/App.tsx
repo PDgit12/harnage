@@ -22,6 +22,7 @@ import {
 	wordmarkChars,
 } from "./brand";
 import { isBuildIntent } from "./build-intent";
+import { Markdown } from "./markdown";
 
 export type HistoryItem =
 	| { kind: "user"; text: string }
@@ -385,13 +386,15 @@ export function App({
 							</Text>
 						)}
 						{item.kind === "agent" && (
-							<Text>
-								<Text bold color={ACCENT}>
-									Agent
+							<Box flexDirection="column">
+								<Text>
+									<Text bold color={ACCENT}>
+										Agent
+									</Text>
+									<Text dimColor>:</Text>
 								</Text>
-								<Text dimColor>: </Text>
-								{item.text}
-							</Text>
+								<Markdown text={item.text} />
+							</Box>
 						)}
 						{item.kind === "tool" && (
 							<Text dimColor>
