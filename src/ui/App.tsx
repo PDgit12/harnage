@@ -143,7 +143,23 @@ export function App({
 	const [cost, setCost] = useState(0);
 	const [spinnerFrame, setSpinnerFrame] = useState(0);
 	const busyRef = useRef(false);
+	// Interactive build interview: the builder's `ask(question, default)`
+	// callback can't use readline in Ink's raw mode, so it bridges through
+	// component state — `askInteractive` shows the question and returns a
+	// promise the next Enter resolves. (This is the onboarding flow.)
+	const [pendingQuestion, setPendingQuestion] = useState<{
+		q: string;
+		def: string;
+	} | null>(null);
+	const askResolveRef = useRef<((answer: string) => void) | null>(null);
 	const engineMode = busy ? "working" : "ready";
+
+	const askInteractive = useCallback((q: string, def: string) => {
+		return new Promise<string>((resolve) => {
+			askResolveRef.current = resolve;
+			setPendingQuestion({ q, def });
+		});
+	}, []);
 
 	useEffect(() => {
 		if (!busy) return;
@@ -251,7 +267,7 @@ export function App({
 					cfg.contextTokens = cfg.contextTokens ?? 8192;
 				options = {
 					provider: createBuildProvider(cfg),
-					ask: async (_q, def) => def,
+					ask: askInteractive,
 				};
 			} catch {
 				options = undefined;
@@ -287,7 +303,7 @@ export function App({
 			setBusy(false);
 			busyRef.current = false;
 		},
-		[push],
+		[push, askInteractive],
 	);
 
 	const resumedRef = useRef(false);
@@ -342,6 +358,18 @@ export function App({
 		(value: string) => {
 			const trimmed = value.trim();
 			setInput("");
+			// Answering a build-interview question takes priority over everything
+			// else — the build is "busy" while waiting on this answer, so this
+			// must run before the busy gate below or the answer would be dropped.
+			if (askResolveRef.current) {
+				const resolve = askResolveRef.current;
+				askResolveRef.current = null;
+				const answer = trimmed || pendingQuestion?.def || "";
+				push({ kind: "user", text: answer });
+				setPendingQuestion(null);
+				resolve(answer);
+				return;
+			}
 			if (!trimmed) return;
 			if (busyRef.current) {
 				// A fast Enter (or a multi-line paste, which submits per embedded
@@ -361,7 +389,7 @@ export function App({
 				void runGoal(trimmed);
 			}
 		},
-		[handleCommand, runGoal, runBuildFlow, push],
+		[handleCommand, runGoal, runBuildFlow, push, pendingQuestion],
 	);
 
 	// Live slash-command menu: surface + highlight matching commands as you type
@@ -423,13 +451,21 @@ export function App({
 				</Box>
 			)}
 
-			{busy && (
+			{busy && !pendingQuestion && (
 				<Box paddingLeft={1}>
 					<Text color={ACCENT}>{SPINNER_FRAMES[spinnerFrame]}</Text>
 					<Text color="yellow">
 						{" "}
 						{activeTool ? `Running ${activeTool}…` : "Thinking…"}
 					</Text>
+				</Box>
+			)}
+
+			{pendingQuestion && (
+				<Box paddingLeft={1}>
+					<Text color={ACCENT}>{`? `}</Text>
+					<Text>{`${pendingQuestion.q} `}</Text>
+					<Text dimColor>{`[${pendingQuestion.def}]`}</Text>
 				</Box>
 			)}
 
@@ -457,7 +493,13 @@ export function App({
 					value={input}
 					onChange={setInput}
 					onSubmit={onSubmit}
-					placeholder={busy ? "working…" : "type a goal or / for commands"}
+					placeholder={
+						pendingQuestion
+							? `press enter for "${pendingQuestion.def}"`
+							: busy
+								? "working…"
+								: "type a goal or / for commands"
+					}
 				/>
 			</Box>
 
