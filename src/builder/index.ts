@@ -335,15 +335,26 @@ export async function buildHarness(
 							)
 							.join("\n");
 						const def = (recs.find((r) => r.installed) ?? recs[0]).id;
-						const answer = await options.ask(
-							`Recommended models for a ${domain} agent on ${Math.round(ramGb)}GB RAM:\n${menu}\n  Pick a number or model name`,
-							def,
-						);
-						const num = Number.parseInt(answer.trim(), 10);
+						const answer = (
+							await options.ask(
+								`Recommended models for a ${domain} agent on ${Math.round(ramGb)}GB RAM:\n${menu}\n  Pick a number or model name`,
+								def,
+							)
+						).trim();
+						const num = Number.parseInt(answer, 10);
+						// Accept a valid menu number, OR a model id that actually exists
+						// (recommended or installed) if typed by name. Any other free
+						// text (e.g. a stray interview-style answer like "no.4") must
+						// NOT become the baked model name — fall back to the default.
+						const knownModel =
+							recs.some((r) => r.id === answer) ||
+							installedNames.includes(answer);
 						plan.defaultLocalModel =
 							Number.isFinite(num) && num >= 1 && num <= recs.length
 								? recs[num - 1].id
-								: answer.trim() || def;
+								: knownModel
+									? answer
+									: def;
 					}
 				} else if (candidates.length) {
 					// Non-interactive: largest installed model that fits the RAM tier.
