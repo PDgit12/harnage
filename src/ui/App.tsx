@@ -1,12 +1,17 @@
 import { Box, Static, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { buildHarness } from "../builder";
 import type { LocalCommandHandler } from "../commands";
 import { COMMANDS, findCommand } from "../commands";
 import { conversation } from "../conv";
 import { costTracker } from "../cost-tracker";
 import type { LoopEngine } from "../loop/LoopEngine";
-import type { ProviderConfig } from "../services/api/client";
+import {
+	createBuildProvider,
+	type ProviderConfig,
+} from "../services/api/client";
+import { resolveProvider } from "../services/api/resolve";
 import {
 	ACCENT,
 	BORDER_STYLE,
@@ -16,6 +21,7 @@ import {
 	VERSION,
 	wordmarkChars,
 } from "./brand";
+import { isBuildIntent } from "./build-intent";
 
 export type HistoryItem =
 	| { kind: "user"; text: string }
@@ -82,6 +88,16 @@ function Banner({
 		</Box>
 	);
 }
+
+// No trailing ellipsis — the busy line renders `Running ${activeTool}…` and
+// appends its own, so a label ending in "…" would double it ("files……").
+const BUILD_STEP_LABELS: Record<string, string> = {
+	analyzing: "Analyzing your request",
+	planning: "Generating build plan",
+	building: "Building harness files",
+	verifying: "Running verification",
+	repairing: "Repairing build errors",
+};
 
 function toolLabel(name: string | undefined, input: unknown): string {
 	const o = (input ?? {}) as Record<string, unknown>;
@@ -213,6 +229,66 @@ export function App({
 		[engine, push, consumeStream],
 	);
 
+	// Build-intent path: run the real builder (not the chat agent) with the
+	// existing spinner wired to live build stages, so a multi-minute build shows
+	// progress instead of a frozen TUI.
+	const runBuildFlow = useCallback(
+		async (description: string) => {
+			push({ kind: "user", text: description });
+			push({
+				kind: "info",
+				text: `${GLYPHS.gear} Building a harness from your description…`,
+			});
+			busyRef.current = true;
+			setBusy(true);
+			setActiveTool(BUILD_STEP_LABELS.analyzing);
+
+			let options: import("../builder").BuildOptions | undefined;
+			try {
+				const cfg = await resolveProvider();
+				if (cfg.type === "ollama")
+					cfg.contextTokens = cfg.contextTokens ?? 8192;
+				options = {
+					provider: createBuildProvider(cfg),
+					ask: async (_q, def) => def,
+				};
+			} catch {
+				options = undefined;
+			}
+
+			try {
+				const result = await buildHarness(
+					description,
+					undefined,
+					(p) => setActiveTool(BUILD_STEP_LABELS[p.stage] ?? "Working…"),
+					options,
+				);
+				if (result.success) {
+					push({
+						kind: "info",
+						text: `${GLYPHS.check} Harness built → ${result.outputDir}`,
+					});
+					push({
+						kind: "info",
+						text: `  cd ${result.outputDir} ${GLYPHS.bullet} bun install ${GLYPHS.bullet} bun start`,
+					});
+				} else {
+					for (const e of result.errors) push({ kind: "error", text: e });
+				}
+			} catch (err) {
+				push({
+					kind: "error",
+					text: err instanceof Error ? err.message : String(err),
+				});
+			}
+
+			setActiveTool(null);
+			setBusy(false);
+			busyRef.current = false;
+		},
+		[push],
+	);
+
 	const resumedRef = useRef(false);
 	useEffect(() => {
 		if (resumeState && !resumedRef.current && !busyRef.current) {
@@ -278,11 +354,13 @@ export function App({
 			}
 			if (trimmed.startsWith("/")) {
 				void handleCommand(trimmed);
+			} else if (isBuildIntent(trimmed)) {
+				void runBuildFlow(trimmed);
 			} else {
 				void runGoal(trimmed);
 			}
 		},
-		[handleCommand, runGoal, push],
+		[handleCommand, runGoal, runBuildFlow, push],
 	);
 
 	// Live slash-command menu: surface + highlight matching commands as you type
