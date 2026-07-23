@@ -101,9 +101,10 @@ export async function runGenerate(
 
 	// Each tool is an independent LLM call — generate them in parallel so a slow
 	// build brain (reasoning models spend ~45s/call) doesn't serialize N tools
-	// into minutes. A single tool that fails all attempts throws and aborts the
-	// build (tools are load-bearing, unlike best-effort enrichment).
-	const results = await Promise.all(
+	// into minutes. allSettled, NOT all: if 1 of 3 tools exhausts its retries,
+	// keep the 2 that generated instead of throwing all 3 away (the old
+	// Promise.all turned "1 bad spec" into "0 bespoke tools" silently).
+	const settled = await Promise.allSettled(
 		custom.map(async (tool): Promise<GeneratedTool | null> => {
 			const toolId = tool.name
 				.toLowerCase()
@@ -156,7 +157,13 @@ Respond with ONLY JSON: {"code": "<the complete file content>"}`;
 		}),
 	);
 
-	return results.filter((t): t is GeneratedTool => t !== null);
+	return settled
+		.filter(
+			(r): r is PromiseFulfilledResult<GeneratedTool | null> =>
+				r.status === "fulfilled",
+		)
+		.map((r) => r.value)
+		.filter((t): t is GeneratedTool => t !== null);
 }
 
 export interface GeneratedCommand {
@@ -186,8 +193,9 @@ export async function runGenerateCommands(
 ): Promise<GeneratedCommand[]> {
 	// Independent per-command LLM calls, run in parallel — same reason as
 	// runGenerate: sequential generation on a slow build brain blows the time
-	// budget. A command that fails all attempts throws and aborts the build.
-	const results = await Promise.all(
+	// budget. allSettled, not all: keep the commands that generated even if one
+	// fails, instead of discarding every bespoke command on a single failure.
+	const settled = await Promise.allSettled(
 		commands.map(async (cmd): Promise<GeneratedCommand | null> => {
 			const id = cmd.name
 				.toLowerCase()
@@ -237,5 +245,11 @@ Respond with ONLY JSON: {"code": "<the complete file content>"}`;
 			};
 		}),
 	);
-	return results.filter((c): c is GeneratedCommand => c !== null);
+	return settled
+		.filter(
+			(r): r is PromiseFulfilledResult<GeneratedCommand | null> =>
+				r.status === "fulfilled",
+		)
+		.map((r) => r.value)
+		.filter((c): c is GeneratedCommand => c !== null);
 }

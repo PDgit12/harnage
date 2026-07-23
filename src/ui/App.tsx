@@ -283,8 +283,16 @@ export function App({
 				if (result.success) {
 					push({
 						kind: "info",
-						text: `${GLYPHS.check} Harness built → ${result.outputDir}`,
+						text: `${GLYPHS.check} Harness built (${result.usedLLM ? "bespoke" : "generic offline chassis"}) → ${result.outputDir}`,
 					});
+					// Don't let a rate-limited fallback masquerade as a full bespoke
+					// build — say plainly it was generic and why.
+					if (!result.usedLLM) {
+						push({
+							kind: "error",
+							text: `  Build brain was unavailable, so this is the generic chassis (no bespoke tools/commands).${result.fallbackReason ? ` Reason: ${result.fallbackReason.slice(0, 120)}` : ""} Retry later for a bespoke build.`,
+						});
+					}
 					push({
 						kind: "info",
 						text: `  cd ${result.outputDir} ${GLYPHS.bullet} bun install ${GLYPHS.bullet} bun start`,

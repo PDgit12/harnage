@@ -68,7 +68,30 @@ export async function completeJSON<T>(
 	let lastError = "";
 
 	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		const { text } = await withRetry(() => completeText(provider, messages));
+		let text: string;
+		try {
+			({ text } = await withRetry(() => completeText(provider, messages)));
+		} catch (err) {
+			// A transport error (413 too-large, an exhausted 429) used to escape
+			// completeJSON on the FIRST iteration, consuming none of the retry
+			// budget and landing straight in the caller's catch-all fallback. On
+			// a 413 specifically, shrink the transcript (drop the oldest
+			// reprompt round) and retry within the remaining budget instead of
+			// aborting the whole build.
+			const msg = err instanceof Error ? err.message : String(err);
+			lastError = msg;
+			const tooLarge = /413|too large|context length|maximum context/i.test(
+				msg,
+			);
+			if (attempt < maxAttempts && tooLarge && messages.length > 2) {
+				// keep the system/user prompt (first 1-2), drop the oldest Q/A pair
+				const head = messages.slice(0, opts?.systemPrompt ? 2 : 1);
+				messages.length = 0;
+				messages.push(...head);
+				continue;
+			}
+			throw err;
+		}
 		lastRaw = text;
 
 		let parsed: unknown;

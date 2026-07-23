@@ -141,10 +141,10 @@ async function llmPlan(
 	context: Awaited<ReturnType<typeof analyzeProject>>,
 	ask: AskFn | undefined,
 	onProgress?: (progress: BuildProgress) => void,
-): Promise<{
-	plan: HarnessPlan;
-	spec: import("./llm/schemas").LLMSpec;
-} | null> {
+): Promise<
+	| { plan: HarnessPlan; spec: import("./llm/schemas").LLMSpec }
+	| { error: string }
+> {
 	try {
 		const { runInterview } = await import("./llm/interview");
 		const { runLLMPlan } = await import("./llm/plan");
@@ -156,12 +156,13 @@ async function llmPlan(
 		const plan = await runLLMPlan(provider, spec, context);
 		return { plan, spec };
 	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
 		onProgress?.({
 			stage: "analyzing",
-			message: "LLM unavailable, using offline analysis",
-			detail: err instanceof Error ? err.message : String(err),
+			message: "Build brain unavailable — using the offline generic chassis",
+			detail,
 		});
-		return null;
+		return { error: detail };
 	}
 }
 
@@ -178,6 +179,11 @@ export async function buildHarness(
 
 	let plan: HarnessPlan | null = null;
 	let extraFiles: Array<{ path: string; code: string }> | undefined;
+	// Tracks whether the bespoke LLM pipeline actually produced the plan, so the
+	// final result can tell the user plainly (a silent keyword fallback on a
+	// transient rate limit used to be indistinguishable from a real build).
+	let usedLLM = false;
+	let fallbackReason: string | undefined;
 	if (options?.provider) {
 		const llm = await llmPlan(
 			options.provider,
@@ -186,7 +192,11 @@ export async function buildHarness(
 			options.ask,
 			onProgress,
 		);
-		if (llm) {
+		if ("error" in llm) {
+			fallbackReason = llm.error;
+		}
+		if ("plan" in llm) {
+			usedLLM = true;
 			plan = llm.plan;
 			// GENERATE stage: real implementations for spec.customTools. The
 			// registry derives tool modules from plan.tools by name, so adding
@@ -437,5 +447,5 @@ export async function buildHarness(
 		message: result.success ? "Build complete!" : "Build encountered errors",
 	});
 
-	return result;
+	return { ...result, usedLLM, fallbackReason };
 }
