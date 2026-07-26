@@ -2025,8 +2025,8 @@ interface PermPrompt { tool: string; target: string; reason: string; resolve: (c
 // Branding — one accent for brand + active state, kept separate from semantic
 // colors (red=error, yellow=busy, green=success, magenta=command-mode). Baked
 // with this harness's OWN name so every generated harness boots branded.
-const ACCENT = "#22d3ee";
-const ACCENT_DIM = "#0e7490";
+const ACCENT = ${JSON.stringify(plan.theme?.accent ?? "#22d3ee")};
+const ACCENT_DIM = ${JSON.stringify(plan.theme?.accentDim ?? "#0e7490")};
 const WORDMARK = ${JSON.stringify(plan.name)};
 // Single-source version: read the harness's OWN package.json (bundler
 // moduleResolution types the JSON import — no resolveJsonModule needed). The
