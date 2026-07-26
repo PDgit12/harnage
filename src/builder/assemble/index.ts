@@ -41,6 +41,13 @@ export interface BuildResult {
 	errors: string[];
 	/** Repair iterations consumed by the verify-repair loop, if it ran. */
 	repairs?: number;
+	/** True when the bespoke LLM pipeline produced the plan; false when the
+	 *  build fell back to the offline keyword chassis (generic, no bespoke
+	 *  tools/commands/skills). Lets the caller tell the user plainly. */
+	usedLLM?: boolean;
+	/** When usedLLM is false because the build brain errored, the reason
+	 *  (e.g. a 429 rate limit) — so the fallback isn't silent. */
+	fallbackReason?: string;
 }
 
 export const BASE_FILES: Array<{
