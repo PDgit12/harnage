@@ -1693,6 +1693,12 @@ export class LoopEngine {
     // exact same tool call after it already failed, forever.
     let lastCallSig = "";
     let sameCallCount = 0;
+    // Same breaker for a repeated identical FINAL answer: once the one-shot
+    // nudges are spent, a model can re-emit the same (possibly wrong) final
+    // turn after turn. Track it so a stuck repeat trips the safety failure
+    // counter instead of looping silently to max-iterations.
+    let lastFinalSig = "";
+    let sameFinalCount = 0;
 
     // Ground small/mid models against real paths up front. Left to themselves
     // they assume a conventional src/ layout and read (or conclude absence on)
@@ -1743,13 +1749,34 @@ export class LoopEngine {
       this.nudged = false;
 
       if (decision.action === "final") {
+        // Repeated-final termination guard: if the model emits the SAME final
+        // answer 3 times (across nudge-driven retries), accept it and stop —
+        // the one-shot nudges are spent and re-prompting won't change it, so
+        // don't burn iterations looping on it. Also marks a failure so the
+        // safety trail reflects it wasn't a clean first-pass finish.
+        const finalSig = (decision.answer ?? "").trim().slice(0, 200);
+        if (finalSig === lastFinalSig) {
+          sameFinalCount++;
+          if (sameFinalCount >= 2) {
+            this.safety.recordFailure();
+            const settled = unwrapFinal(decision.answer ?? "");
+            this.messages.push({ role: "assistant", content: settled });
+            if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
+            return settled;
+          }
+        } else {
+          lastFinalSig = finalSig;
+          sameFinalCount = 0;
+        }
         // Memory-grounded answer: when the deterministic recall gate already
         // seeded a <recalled_memory> block into the transcript (the facts this
         // exact question needs), answering "from memory" is exactly right — the
         // recalled data IS the grounding. Skip the act-before-answer push and
         // the filesystem verify chase, so a correct first-pass answer isn't
         // regressed into a wrong one by an ENOENT tool hunt for the same fact.
-        const memoryBacked = this.messages.some(
+        // Scoped to the FIRST answer (iteration 1): a recall early in a long
+        // session must not disable grounding for every later, unrelated answer.
+        const memoryBacked = iteration <= 1 && this.messages.some(
           (m) => m.role === "system" && typeof m.content === "string" && m.content.includes("<recalled_memory>"),
         );
         // Act-before-answer: a small model often answers from memory on turn 1
@@ -1906,6 +1933,13 @@ export class LoopEngine {
         role: "user",
         content: "Plan:\\n" + steps.map((s, i) => \`\${i + 1}. \${s}\`).join("\\n") + "\\n\\nExecute the plan step by step using tools.",
       });
+    } else {
+      // Plan parse produced nothing (grammar drift / malformed JSON). Don't
+      // silently pretend plan-act ran — surface it and audit, so a run that
+      // quietly degraded to a plain decision loop is distinguishable from one
+      // that genuinely needed no plan.
+      this.onEvent?.({ type: "status", content: "planning produced no steps — running unplanned" });
+      audit("plan_empty", { goal: goal.slice(0, 120) });
     }
     return this.runDecisionLoop(goal);
   }
