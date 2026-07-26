@@ -8,7 +8,10 @@ import { z } from "zod";
 export const SpecSchema = z.object({
 	name: z.string().min(1).describe("short kebab-friendly agent name"),
 	purpose: z.string().min(1).describe("one-sentence agent purpose"),
-	language: z.array(z.string()).default(["typescript"]),
+	// Default to no language, not ["typescript"] — a research/support/data
+	// harness has no language, and defaulting to TS was an invisible anchor
+	// that biased non-coding domains toward code-agent behavior.
+	language: z.array(z.string()).default([]),
 	tools: z
 		.array(z.string())
 		.describe("tool ids, e.g. bash, file_read, grep, mcp"),
