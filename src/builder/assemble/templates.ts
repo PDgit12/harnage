@@ -135,6 +135,7 @@ async function resolveProviderConfig(): Promise<ProviderConfig> {
   let model = "gpt-4o";
   let baseUrl: string | undefined;
   let maxTokens = 8192;
+  let hasSaved = false;
   if (existsSync(CONFIG_PATH)) {
     try {
       const saved = JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as Partial<ProviderConfig>;
@@ -142,10 +143,17 @@ async function resolveProviderConfig(): Promise<ProviderConfig> {
       model = saved.model ?? model;
       baseUrl = saved.baseUrl;
       maxTokens = saved.maxTokens ?? maxTokens;
+      hasSaved = true;
     } catch { /* ignore */ }
   }
   const envKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
   if (envKey) return { type, model, apiKey: envKey, baseUrl, maxTokens };
+  // Honor a saved ollama config (from /config or a prior setup) instead of
+  // re-detecting — otherwise a user's explicit model/baseUrl choice was
+  // silently thrown away and the harness always re-probed localhost.
+  if (hasSaved && type === "ollama") {
+    return { type: "ollama", model, baseUrl: baseUrl ?? "http://localhost:11434", maxTokens: maxTokens || 4096, contextTokens: 8192 };
+  }
   const localModel = await detectLocalModel();
   return { type: "ollama", model: localModel, baseUrl: "http://localhost:11434", maxTokens: 4096, contextTokens: 8192 };
 }
@@ -189,20 +197,47 @@ async function detectLocalModel(): Promise<string> {
   return packed;
 }
 
-async function listLocalModels(): Promise<string[]> {
+async function listLocalModels(baseUrl = "http://localhost:11434"): Promise<string[]> {
   try {
-    const res = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(baseUrl.replace(/\\/$/, "") + "/api/tags", { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return [];
     const data = await res.json() as { models?: Array<{ name: string }> };
     return (data.models ?? []).map(m => m.name).filter(n => !n.includes("embed"));
   } catch { return []; }
 }
 
+// Is an Ollama endpoint actually usable — running AND with at least one
+// non-embedding model pulled? An ollama config that points at a dead daemon
+// (or one with no models) used to be returned as "configured", so the banner
+// showed a model and then the first goal died on a raw fetch ECONNREFUSED.
+async function ollamaUsable(baseUrl = "http://localhost:11434"): Promise<{ ok: boolean; models: string[] }> {
+  const models = await listLocalModels(baseUrl);
+  return { ok: models.length > 0, models };
+}
+
 async function ensureConfig(): Promise<ProviderConfig> {
   const existing = await resolveProviderConfig();
-  if (existing.apiKey || existing.type === "ollama") return existing;
-
-  console.log(chalk.yellow("\\nNo provider configured. Quick setup:"));
+  // A remote provider with a key is ready to go.
+  if (existing.apiKey) return existing;
+  // An ollama config is only ready if the daemon is actually running WITH a
+  // model — otherwise fall through to setup instead of returning a config
+  // that fails on the first goal.
+  if (existing.type === "ollama") {
+    const { ok, models } = await ollamaUsable(existing.baseUrl);
+    if (ok) {
+      // If the packed model isn't installed, use one that is.
+      if (!models.includes(existing.model)) existing.model = models[0];
+      return existing;
+    }
+    console.log(chalk.yellow("\\nNo model is connected yet."));
+    console.log(chalk.dim("  Ollama isn't running (or has no models) at " + (existing.baseUrl ?? "http://localhost:11434") + "."));
+    console.log(chalk.dim("  Fix by any one of:"));
+    console.log(chalk.dim("    - start Ollama and pull a model:  ollama serve  then  ollama pull " + ${JSON.stringify(plan.defaultLocalModel ?? "llama3")}));
+    console.log(chalk.dim("    - use a hosted model: set OPENROUTER_API_KEY (or OPENAI_API_KEY) and relaunch"));
+    console.log(chalk.dim("    - or configure below.\\n"));
+  } else {
+    console.log(chalk.yellow("\\nNo provider configured. Quick setup:"));
+  }
   const rl = createInterface({ input: stdIn, output: stdOut });
   console.log("  1) OpenRouter (many models, needs API key)");
   console.log("  2) Ollama (local, free)");
