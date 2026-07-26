@@ -63,3 +63,8 @@ CLAUDE.md
 .claude-flow/
 .worktrees/
 .claude/orchestration/
+
+# internal design docs — kept private to protect the approach (idea moat)
+design.md
+knowledge.md
+AGENTS.md
