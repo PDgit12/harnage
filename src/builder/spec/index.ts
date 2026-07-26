@@ -142,36 +142,37 @@ export class ValidationError extends Error {
 }
 
 export function validateAgentPrompt(prompt: string): void {
-	const lower = prompt.toLowerCase();
+	const lower = prompt.trim().toLowerCase();
 
-	for (const pattern of NON_AGENT_PATTERNS) {
-		if (pattern.test(lower)) {
-			throw new ValidationError(
-				`"${prompt}" describes a general application, not an AI agent. ` +
-					"harnage builds autonomous AI agents — bots that use tools, " +
-					"follow goals, and run in a loop.\n\n" +
-					"Examples of what you CAN build:\n" +
-					"- A code review agent that checks pull requests\n" +
-					"- A documentation generator bot\n" +
-					"- A file system monitoring agent\n" +
-					"- A project management assistant\n" +
-					"- A system diagnostics agent",
-			);
-		}
+	// Reject only genuinely empty input — a task description IS a valid agent
+	// request. The old keyword-whitelist ("must contain agent/bot/analyze/…")
+	// rejected perfectly valid harnesses whose verb wasn't on the list
+	// (triage, rank, categorize, draft, schedule, …) — a whack-a-mole
+	// gatekeeper that blocked real builds. Be permissive; the interview/spec
+	// stage shapes vague input, it doesn't need a magic word.
+	if (lower.split(/\s+/).filter(Boolean).length < 2) {
+		throw new ValidationError(
+			`"${prompt}" is too short to build from. Describe what the agent should do, e.g. "triage customer support tickets by urgency" or "review pull requests for bugs".`,
+		);
 	}
 
+	// The one real guard: a bare app/product request with NO agent framing
+	// ("a todo app", "an ecommerce store") isn't an agent. But an agent-framed
+	// version of the same domain ("an agent that drafts blog posts") is fine,
+	// so only reject when there's no agent keyword anywhere.
 	const hasAgentKeyword = AGENT_KEYWORDS.some((k) => lower.includes(k));
-	if (!hasAgentKeyword && lower.split(/\s+/).length > 3) {
-		throw new ValidationError(
-			`"${prompt}" doesn't describe an AI agent. ` +
-				"Describe what the agent should DO, not what app to build.\n\n" +
-				"Instead of:\n" +
-				'- "A TODO app with a file-based backend"\n\n' +
-				"Try:\n" +
-				'- "An agent that manages TODO tasks through file operations"\n' +
-				'- "A code review agent"\n' +
-				'- "A file organizer bot"',
-		);
+	if (!hasAgentKeyword) {
+		for (const pattern of NON_AGENT_PATTERNS) {
+			if (pattern.test(lower)) {
+				throw new ValidationError(
+					`"${prompt}" reads like a general app, not an AI agent. ` +
+						"harnage builds autonomous agents that use tools, follow goals, and run in a loop.\n\n" +
+						"Try describing what the agent should DO, e.g.:\n" +
+						'- "An agent that manages TODO tasks through file operations"\n' +
+						'- "An agent that monitors my store\'s reviews and flags issues"',
+				);
+			}
+		}
 	}
 }
 
