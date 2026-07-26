@@ -1325,6 +1325,10 @@ export class LoopEngine {
   // Long-term memory: on for top-level user sessions, off for sub-agents
   // (persistSession false) so spawned agents never pollute the durable store.
   private memory: MemoryStore | null = null;
+  // Real filenames in the working directory, captured once at grounding. Used
+  // to HARD-block a false "that file doesn't exist" final answer about a file
+  // that provably exists (the single-shot verify nudge let repeats through).
+  private knownFiles = new Set<string>();
   // Real Ctrl+C cancellation: abort() fires this signal, which every
   // streamProvider() call below passes through — the in-flight fetch/read
   // aborts immediately instead of Ctrl+C only exiting once it finishes.
@@ -1698,6 +1702,7 @@ export class LoopEngine {
         !this.messages.some(m => typeof m.content === "string" && m.content.startsWith("Files in the working directory:"))) {
       try {
         const entries = (await import("node:fs")).readdirSync(process.cwd());
+        for (const e of entries) this.knownFiles.add(e.toLowerCase());
         const listing = entries.slice(0, 50).join(", ") + (entries.length > 50 ? ", …" : "");
         this.messages.unshift({ role: "user", content: \`Files in the working directory: \${listing}. Read paths relative to this directory — do NOT assume a src/ subfolder.\` });
       } catch { /* fs unavailable — skip grounding */ }
@@ -1756,6 +1761,31 @@ export class LoopEngine {
           this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
           this.messages.push({ role: "user", content: "You have not used any tool yet. Do not answer from memory — call the appropriate tool to inspect or change the real files first, then finish." });
           continue;
+        }
+        // HARD block (not single-shot): a final answer that claims a file is
+        // missing when that file PROVABLY exists in the working directory is
+        // never accepted — no matter how many times the model repeats it. This
+        // is the enforcement the one-shot verify nudge below lacked: the eval
+        // caught a 3B model returning "big.ts does not exist" as final despite
+        // big.ts being real and in the grounding listing. recordFailure() feeds
+        // the consecutive-failure breaker, so a stubborn model hits a clean
+        // safety stop instead of returning the false claim. A GENUINE absence
+        // survives — the file simply isn't in knownFiles.
+        {
+          const ans = unwrapFinal(decision.answer ?? "").toLowerCase();
+          if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
+              this.tools.length > 0 && NEGATIVE_CLAIM.test(ans)) {
+            const realFile = [...this.knownFiles].find(
+              (f) => f.length >= 3 && new RegExp("(^|[^a-z0-9])" + f.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&") + "([^a-z0-9]|$)").test(ans),
+            );
+            if (realFile) {
+              this.safety.recordFailure();
+              this.onEvent?.({ type: "status", content: "blocking a false 'not found' claim" });
+              this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+              this.messages.push({ role: "user", content: \`"\${realFile}" DOES exist in the current directory — your claim that it is missing is wrong. Use the file_read tool on "\${realFile}" (path relative to the current directory) and answer from its real contents.\` });
+              continue;
+            }
+          }
         }
         // Verify pass: a negative claim from a small/mid model is grounded against
         // the real filesystem before it's trusted. Small models hallucinate a
@@ -1954,9 +1984,20 @@ export class LoopEngine {
     }
     try {
       const r = await tool.call(parsed.data as Record<string, unknown>, this.toolContext);
+      // A tool that RETURNS { error, isError } (e.g. file_edit "oldString not
+      // found", web_fetch HTTP error) failed just as much as one that threw —
+      // record it as a failure, not a success. Counting these as successes
+      // reset the consecutive-failure breaker (so a model retrying a slightly-
+      // wrong edit forever never tripped it) and made the audit log claim ok:true
+      // for operations that failed.
+      if (r.error) {
+        this.safety.recordFailure();
+        audit("tool_call", { tool: tool.name, target, ok: false, error: String(r.error).slice(0, 200) });
+        return r.error;
+      }
       this.safety.recordSuccess();
       audit("tool_call", { tool: tool.name, target, ok: true });
-      return r.error ? r.error : r.content ?? JSON.stringify(r.data ?? "");
+      return r.content ?? JSON.stringify(r.data ?? "");
     } catch (err) {
       this.safety.recordFailure();
       audit("tool_call", { tool: tool.name, target, ok: false, error: String(err).slice(0, 200) });

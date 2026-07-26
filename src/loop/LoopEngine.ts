@@ -400,8 +400,18 @@ export class LoopEngine {
 			this.failures.push(fullText);
 		}
 
-		// ponytail: simple YES/NO heuristic. Upgrade to structured output if needed.
-		if (/^yes\b/im.test(fullText.trim())) {
+		// The prompt asks the model to END its reply with a line starting YES/NO.
+		// Read the verdict from the LAST non-empty line only — the old /^yes/im
+		// matched "Yes" at the start of ANY line, so "Yes, step 1 worked.\n…\nNO,
+		// step 2 failed." falsely completed on the first line's "Yes".
+		const lastLine =
+			fullText
+				.trim()
+				.split("\n")
+				.map((l) => l.trim())
+				.filter(Boolean)
+				.pop() ?? "";
+		if (/^yes\b/i.test(lastLine)) {
 			this.state.phase = "done";
 			yield { type: "done" };
 		} else {
