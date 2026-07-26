@@ -22,7 +22,7 @@
   "bugs": {
     "url": "https://github.com/PDgit12/harnage/issues"
   },
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "author": "Piyush Dua",
   "module": "src/main.tsx",
   "type": "module",

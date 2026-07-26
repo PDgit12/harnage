@@ -45,12 +45,16 @@ export default {
 		if (request.method === "OPTIONS") {
 			return new Response(null, { headers: corsHeaders() });
 		}
-		if (request.method !== "POST") {
-			return json({ error: "method not allowed" }, 405);
-		}
 		const url = new URL(request.url);
+		// Health check is a GET — must come BEFORE the POST-only gate below, or
+		// the CLI's probeSharedProxy (a GET /health) always gets 405 and treats
+		// a perfectly healthy proxy as down, so the shared-proxy tier never
+		// activates even when correctly deployed.
 		if (url.pathname === "/health") {
 			return json({ ok: true });
+		}
+		if (request.method !== "POST") {
+			return json({ error: "method not allowed" }, 405);
 		}
 		if (!url.pathname.endsWith("/chat/completions")) {
 			return json({ error: "not found" }, 404);
