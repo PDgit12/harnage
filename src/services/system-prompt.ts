@@ -263,13 +263,22 @@ export function buildAgentSystemPrompt(input: {
 	purpose: string;
 	domainKnowledge?: string;
 	tools: string[];
-	interactive?: boolean;
 }): string {
 	const displayName = input.name.replace(/-/g, " ");
 	const tools = input.tools.filter((t) => TOOL_USAGE[t]);
 	const hasFileWrite = tools.some((t) =>
 		["file_write", "file_edit", "bash"].includes(t),
 	);
+	// "cite file:line" only makes sense for a code agent — for a research or
+	// support harness the source is a URL or command output. Generalise so the
+	// prompt isn't secretly code-anchored (the same anchoring bias the few-shot
+	// examples have, but in the identity itself).
+	const hasCodeTools = tools.some((t) =>
+		["file_read", "file_edit", "glob", "grep"].includes(t),
+	);
+	const cite = hasCodeTools
+		? "cite the source you used (a file:line, a URL, or command output)"
+		: "cite the source you used (a URL or the tool output it came from)";
 
 	const out: string[] = [];
 	out.push(`You are ${displayName} — ${input.purpose.trim()}.`);
@@ -285,11 +294,16 @@ export function buildAgentSystemPrompt(input: {
 
 	out.push("");
 	out.push("## How you work");
+	// Approach first (Pi-Agent-style discipline): a weak model left to itself
+	// answers from guesswork; tell it to gather real context before acting.
+	out.push(
+		"- Understand the goal, then gather what you actually need with your tools before answering — do not guess or assume.",
+	);
 	out.push(
 		"- Act, don't narrate. When a step needs a tool, call it — never write out what you “will” do next.",
 	);
 	out.push(
-		"- Never state a fact, file's contents, or a result you have not verified with a tool. Read or run first, then answer.",
+		"- Never state a fact, a file's contents, or a result you have not verified with a tool. Read or run first, then answer.",
 	);
 	out.push("- One tool call per step; wait for its result before the next.");
 	out.push(
@@ -307,7 +321,7 @@ export function buildAgentSystemPrompt(input: {
 	out.push("");
 	out.push("## Output");
 	out.push(
-		"Answer concisely in plain text. Cite file:line when you refer to code. No preamble, no restating the question.",
+		`Answer concisely in plain text, grounded in what your tools actually returned — ${cite}. No preamble, no restating the question.`,
 	);
 
 	return out.join("\n");
