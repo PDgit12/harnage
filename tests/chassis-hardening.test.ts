@@ -58,14 +58,14 @@ describe("chassis hardening — audit fixes in generated source", () => {
 		expect(session).toContain("console.warn");
 	});
 
-	it("field-defect: a <recalled_memory>-backed answer skips the forced-tool-use and verify gates", () => {
+	it("a <recalled_memory>-backed answer skips the gates ONLY on the first turn (scoped bypass)", () => {
 		// the guard that detects an injected recalled-memory block
 		expect(engine).toContain('m.content.includes("<recalled_memory>")');
-		expect(engine).toContain("const memoryBacked = this.messages.some(");
+		// bypass is now scoped to iteration <= 1 — a recall early in a long
+		// session must not disable grounding for every later, unrelated answer
+		expect(engine).toContain("iteration <= 1 && this.messages.some(");
 		// act-before-answer push is suppressed when memory-backed
-		expect(engine).toContain(
-			"!this.isSmallTalk(goal) && !memoryBacked",
-		);
+		expect(engine).toContain("!this.isSmallTalk(goal) && !memoryBacked");
 		// filesystem verify chase is suppressed when memory-backed
 		expect(engine).toContain(
 			"!verifyChecked && this.tools.length > 0 && !memoryBacked",

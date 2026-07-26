@@ -19,6 +19,11 @@ export class LoopEngine {
 	private ctxCfg: ContextConfig;
 	private pendingToolCalls: ToolUse[] = [];
 	private failures: string[] = [];
+	// Repeated-identical-tool-call breaker (the generated small-tier chassis has
+	// this; the reference engine lacked it and could burn its whole iteration
+	// budget re-issuing the same failing call across adapt→execute cycles).
+	private lastCallSig = "";
+	private sameCallCount = 0;
 	private systemPrompt: string;
 
 	constructor(config: {
@@ -278,6 +283,26 @@ export class LoopEngine {
 
 	private async *execute(): AsyncGenerator<StreamEvent> {
 		for (const call of this.pendingToolCalls) {
+			// Break a stuck loop: the exact same tool+args as the last executed
+			// call means the model is repeating itself. After 2 identical repeats,
+			// stop rather than burn the whole iteration budget on it.
+			const sig = `${call.name}:${JSON.stringify(call.input)}`;
+			if (sig === this.lastCallSig) {
+				this.sameCallCount++;
+				if (this.sameCallCount >= 2) {
+					this.failures.push(`repeated identical tool call: ${call.name}`);
+					this.state.phase = "failed";
+					yield {
+						type: "error",
+						content: `Stopped: the same ${call.name} call was repeated ${this.sameCallCount + 1} times with no change. Rephrase the goal.`,
+					};
+					return;
+				}
+			} else {
+				this.lastCallSig = sig;
+				this.sameCallCount = 0;
+			}
+
 			const tool = this.tools.find((t) => t.name === call.name);
 
 			yield {
