@@ -90,8 +90,8 @@ process.on("SIGINT", async () => { await disconnectMcp(); process.exit(0); });
 // badge in this harness's classic REPL. Kept separate from semantic colors
 // (red=error, yellow=busy, green=success). No new deps: chalk only.
 
-const ACCENT = "#22d3ee";
-const ACCENT_DIM = "#0e7490";
+const ACCENT = ${JSON.stringify(plan.theme?.accent ?? "#22d3ee")};
+const ACCENT_DIM = ${JSON.stringify(plan.theme?.accentDim ?? "#0e7490")};
 const HARNESS_NAME = ${JSON.stringify(plan.name)};
 const HARNESS_TAGLINE = ${JSON.stringify(plan.description)};
 

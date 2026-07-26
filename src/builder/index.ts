@@ -54,6 +54,9 @@ export interface HarnessPlan {
 		eval?: boolean;
 		judgeByDefault?: boolean;
 	};
+	/** Per-domain accent palette baked into the generated TUI (same chassis,
+	 *  colours derived from what the harness is for). */
+	theme?: { accent: string; accentDim: string };
 }
 
 export interface BuildProgress {
@@ -276,6 +279,12 @@ export async function buildHarness(
 		onProgress?.({ stage: "planning", message: "Generating build plan..." });
 		plan = generatePlan(spec);
 	}
+
+	// Per-domain theme: same chassis, accent palette derived from what the
+	// harness is for (finance→green, security→red, …). Set on both the LLM and
+	// keyword paths.
+	const { pickTheme } = await import("./theme");
+	plan.theme = pickTheme(`${plan.description} ${plan.name} ${prompt}`);
 
 	// Model-aware packing: list the user's installed local models (HTTP tag
 	// listing only — never runs a model) so the harness ships preconfigured.
