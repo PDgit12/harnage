@@ -74,11 +74,19 @@ export const IssueSearchTool = {
   inputSchema,
   isReadOnly: () => true,
   async call(input: { query: string; limit?: number }) {
+    // Real base URL + credentials come from env — never hardcode a placeholder
+    // host, and error clearly when the env var is unset instead of calling a
+    // dead endpoint.
+    const base = process.env.ISSUE_API_URL;
+    if (!base) return { error: "Set ISSUE_API_URL to your issue tracker's API base URL", isError: true };
     try {
-      const res = await fetch("https://api.example.com/search?q=" + encodeURIComponent(input.query));
+      const res = await fetch(base + "/search?q=" + encodeURIComponent(input.query), {
+        headers: process.env.ISSUE_API_KEY ? { Authorization: "Bearer " + process.env.ISSUE_API_KEY } : {},
+      });
       if (!res.ok) return { error: "Search failed: HTTP " + res.status, isError: true };
-      const data = await res.json();
-      return { data, content: JSON.stringify(data).slice(0, 2000) };
+      const data = await res.json() as { items?: Array<{ title?: string }> };
+      const items = data.items ?? [];
+      return { data, content: items.map((i) => "- " + (i.title ?? "(untitled)")).join("\\n") || "No results." };
     } catch (err) {
       return { error: String(err), isError: true };
     }
@@ -145,6 +153,8 @@ Rules:
 - call() returns { data?, content? } on success or { error, isError: true } on failure — never throw
 - Only use Bun/Node built-ins (node:fs, node:path, node:child_process, fetch) and zod — no other packages
 - If the tool needs credentials, read them from process.env and return a clear error when missing
+- Never hardcode a placeholder API host (e.g. api.example.com). Read the base URL from an env var and return a clear error when it is unset
+- content should be a short human-readable summary, not raw JSON
 
 Respond with ONLY JSON: {"code": "<the complete file content>"}`;
 

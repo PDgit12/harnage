@@ -48,27 +48,50 @@ export async function call(_args: string[], _context: unknown): Promise<{ value:
   };
 }
 `,
-	config: `import { createInterface } from "node:readline/promises";
+	config: `import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+
+// Persists provider/model to ~/.<name>/config.json (the same file the harness
+// reads at startup). The API key is deliberately NOT written to disk — it is
+// read from an env var at runtime, so the user is told which one to set rather
+// than the command silently claiming to have saved a secret it discards.
 export async function call(_args: string[], _context: unknown): Promise<{ value: string }> {
+  const pkg = (await import("../../package.json")) as { name?: string; default?: { name?: string } };
+  const pkgName = pkg.name ?? pkg.default?.name ?? "harness";
   const rl = createInterface({ input: stdin, output: stdout });
-  const lines: string[] = [];
+  const lines: string[] = ["\\x1b[1mConfiguration\\x1b[0m\\n"];
+  try {
+    const providerIn = (await rl.question("  Provider (ollama/openai/openrouter/anthropic) [ollama]: ")).trim();
+    const provider = providerIn || "ollama";
+    const model = (await rl.question("  Model [auto]: ")).trim() || "auto";
+    let baseUrl: string | undefined;
+    if (provider === "openai" || provider === "openrouter") {
+      baseUrl = (await rl.question("  Base URL (blank for default): ")).trim() || undefined;
+    }
 
-  lines.push("\\x1b[1mConfiguration\\x1b[0m\\n");
+    const cfg: Record<string, unknown> = { type: provider, model };
+    if (baseUrl) cfg.baseUrl = baseUrl;
 
-  const provider = await rl.question("  Provider (anthropic/openai/ollama) [ollama]: ");
-  lines.push(\`  Provider: \${provider || "ollama"}\`);
+    const dir = join(homedir(), "." + pkgName);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify(cfg, null, 2));
+    try { chmodSync(path, 0o600); } catch { /* best-effort perms */ }
 
-  const model = await rl.question("  Model [auto]: ");
-  lines.push(\`  Model: \${model || "auto"}\`);
-
-  if (provider !== "ollama") {
-    const key = await rl.question("  API Key: ");
-    lines.push(\`  API Key: \${key ? "***" : "(none)"}\`);
+    lines.push("  Provider: " + provider);
+    lines.push("  Model: " + model);
+    if (baseUrl) lines.push("  Base URL: " + baseUrl);
+    lines.push("\\n\\x1b[32mSaved to " + path + "\\x1b[0m");
+    if (provider !== "ollama") {
+      const envVar = provider === "anthropic" ? "ANTHROPIC_API_KEY" : provider === "openrouter" ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY";
+      lines.push("\\x1b[2m  API key is read from the " + envVar + " env var (never written to disk).\\x1b[0m");
+    }
+  } finally {
+    rl.close();
   }
-
-  rl.close();
-  lines.push("\\n\\x1b[32mConfig saved.\\x1b[0m");
   return { value: lines.join("\\n") };
 }
 `,
