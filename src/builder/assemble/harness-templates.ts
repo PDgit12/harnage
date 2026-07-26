@@ -229,7 +229,14 @@ export class MemoryStore {
     if (!db) return "";
     const words = query.toLowerCase().match(/[a-z0-9]{4,}/g);
     if (!words || words.length === 0) return "";
-    const terms = [...new Set(words)].slice(0, 12);
+    // Drop common 4+ char stopwords before LIKE-matching: recall is crude
+    // substring matching, and a match on "this"/"that"/"with"/"review" etc.
+    // pulls in tangential memory that then flips memoryBacked=true and skips
+    // the act-before-answer guard — making the model answer from irrelevant
+    // recall instead of using a tool. Filtering them keeps recall specific.
+    const STOP = new Set(["this","that","with","from","have","your","will","what","when","where","which","would","could","should","about","there","their","then","than","them","they","been","were","into","over","some","such","only","also","just","like","make","made","does","done","need","want","using","used","please","help"]);
+    const terms = [...new Set(words)].filter((w) => !STOP.has(w)).slice(0, 12);
+    if (terms.length === 0) return "";
     try {
       const facts = new Map<string, string>();
       const events = new Map<string, string>();
