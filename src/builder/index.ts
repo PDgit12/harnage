@@ -572,12 +572,33 @@ async function runBuildAcceptance(
 	let tasks: Awaited<ReturnType<typeof runGenerateAcceptance>> = [];
 	try {
 		tasks = await runGenerateAcceptance(provider, plan, prompt, want);
-	} catch (err) {
-		onProgress?.({
-			stage: "verifying",
-			message: "Acceptance skipped — could not plan tasks",
-			detail: err instanceof Error ? err.message : String(err),
-		});
+	} catch (firstErr) {
+		// Battery EXECUTION is budgeted by model speed; generation was not, so a
+		// slow build brain simply failed. Observed: a local 14B exceeded the
+		// 5-minute provider timeout authoring 16 tasks and the build shipped with
+		// no acceptance at all. Retry small — a 6-task battery is far better than
+		// none, and a fast API brain never reaches this path.
+		const slow = /timed? ?out|abort/i.test(
+			firstErr instanceof Error ? firstErr.message : String(firstErr),
+		);
+		if (slow && want > 6) {
+			onProgress?.({
+				stage: "verifying",
+				message: `Build brain too slow for ${want} tasks — retrying with 6...`,
+			});
+			try {
+				tasks = await runGenerateAcceptance(provider, plan, prompt, 6);
+			} catch {
+				/* fall through to the shared skip path below */
+			}
+		}
+		if (!tasks.length) {
+			onProgress?.({
+				stage: "verifying",
+				message: "Acceptance skipped — could not plan tasks",
+				detail: firstErr instanceof Error ? firstErr.message : String(firstErr),
+			});
+		}
 	}
 
 	const runtime = await resolveAcceptanceProvider(plan);
