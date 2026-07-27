@@ -109,16 +109,38 @@ _Coming soon — asciinema/GIF walkthrough of `harnage init` → generated harne
 
 ```bash
 bun run typecheck   # tsc --noEmit
-bun run test        # vitest — 30 files, 203 tests passing
+bun run test        # vitest — 46 files, 312 tests passing
 bun run lint        # biome check src/
 bun run build       # compile binary
 ```
 
 Generated harnesses must themselves pass `bun install && tsc --noEmit` — the builder verifies this and runs an LLM repair loop on failures.
 
+### Evals
+
+Two axes, both offline-capable. Results append to `~/.harnage/eval-results.jsonl`.
+
+```bash
+bun run eval:build         # BUILD axis: 10 domain prompts must build, compile,
+                           # import nothing undeclared, and emit a registry that resolves
+bun run eval qwen2.5:3b --suite smoke        # RUNTIME axis: 13 fast tasks
+bun run eval qwen2.5:3b --suite full         # all 89 tasks, 8 categories
+bun run eval:dry           # validate the battery itself, no model needed
+```
+
+The battery spans code · edit · data · docs · multistep · tools · refusal · safety.
+Most tasks are graded by a deterministic check; the open-ended ones (summaries,
+refusals, injection resistance) are graded by an **LLM judge** against a written rubric.
+Where a task has both, the check gates and the judge grades on top.
+
+Pick the judge with `EVAL_JUDGE_MODEL`: unset = deterministic only · `config` = use the
+build brain from `~/.harnage/config.json` (nothing extra runs on your machine) · or any
+Ollama model name. The judge is first scored against a hand-labelled set and **refused
+below 75% agreement** rather than silently trusted.
+
 ## Status
 
-Published: `harnage@0.1.0` on npm, MIT licensed, prebuilt binaries on GitHub releases. Working:
+Published: `harnage@0.5.0` on npm, FSL-1.1-ALv2 licensed, prebuilt binaries on GitHub releases. Working:
 builder end-to-end (API + local + offline paths), reference harness (including MCP-server-consumer
 mode), all 9 tools, path-rule permissions, memory, eval, TUI. In progress: external-MCP consumption
 in *generated* harnesses (the `harnage` CLI itself already consumes MCP servers). No interactive

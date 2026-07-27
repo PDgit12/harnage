@@ -5,6 +5,7 @@ import type { Tool, ToolContext } from "../Tool";
 import { type ContextConfig, compactMessages, estimateTokens } from "./context";
 import { saveLoop } from "./persistence";
 import { type SafetyConfig, SafetyMonitor } from "./safety";
+import { resolveToolByName } from "./tool-parser";
 import type { LoopState, SafetyRails, ToolUse } from "./types";
 
 export class LoopEngine {
@@ -303,11 +304,13 @@ export class LoopEngine {
 				this.sameCallCount = 0;
 			}
 
-			const tool = this.tools.find((t) => t.name === call.name);
+			// Tolerate the names small models actually emit (`GrepTool`,
+			// PascalCase, args glued onto the name) before declaring not-found.
+			const tool = resolveToolByName(this.tools, call.name);
 
 			yield {
 				type: "tool_use",
-				name: call.name,
+				name: tool?.name ?? call.name,
 				input: call.input,
 				id: call.id,
 			};
@@ -315,8 +318,13 @@ export class LoopEngine {
 			let output: string;
 			let success: boolean;
 
+			// Resolved name where we have one, so permission rules, transcript
+			// echo and trace all key off the tool's real id rather than whatever
+			// spelling the model emitted.
+			const toolName = tool?.name ?? call.name;
+
 			if (!tool) {
-				output = `Tool '${call.name}' not found`;
+				output = `Tool '${call.name}' not found. Available: ${this.tools.map((t) => t.name).join(", ")}`;
 				success = false;
 			} else {
 				try {
@@ -324,7 +332,7 @@ export class LoopEngine {
 					// no matching rule falls through to the tool's own check.
 					const { ruleVerdict } = await import("../permissions");
 					const permResult =
-						ruleVerdict(this.toolContext.permissions, call.name, call.input) ??
+						ruleVerdict(this.toolContext.permissions, toolName, call.input) ??
 						(await tool.checkPermissions?.(call.input, this.toolContext));
 					if (permResult && !permResult.allowed) {
 						output = `Permission denied: ${permResult.reason || "Not allowed"}`;
@@ -348,7 +356,7 @@ export class LoopEngine {
 				role: "assistant",
 				content: JSON.stringify({
 					type: "tool_use",
-					name: call.name,
+					name: toolName,
 					input: call.input,
 					id: call.id,
 				}),
@@ -363,7 +371,7 @@ export class LoopEngine {
 			});
 
 			this.state.toolResults.push({
-				tool: call.name,
+				tool: toolName,
 				input: call.input,
 				output,
 				success,
@@ -371,7 +379,7 @@ export class LoopEngine {
 
 			yield {
 				type: "tool_result",
-				name: call.name,
+				name: toolName,
 				id: call.id,
 				content: output,
 			};

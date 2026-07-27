@@ -48,7 +48,11 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "golden": "bun scripts/golden-e2e.ts",
-    "egress": "bun scripts/egress-check.ts"
+    "egress": "bun scripts/egress-check.ts",
+    "eval": "bun scripts/eval.ts",
+    "eval:dry": "bun scripts/eval.ts --dry-run",
+    "eval:build": "bun scripts/eval-build.ts",
+    "eval:build:dry": "bun scripts/eval-build.ts --dry-run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

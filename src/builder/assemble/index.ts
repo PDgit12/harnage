@@ -1,5 +1,7 @@
 import { execSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { generateCommandFiles } from "../generate/command-generator";
 import { generateToolFiles } from "../generate/tool-generator";
@@ -73,6 +75,25 @@ export const BASE_FILES: Array<{
 	{ path: "vitest.config.ts", purpose: "test configuration", deps: [] },
 ];
 
+/** PascalCase base names of the tool modules that really exist under src/tools/
+ *  — i.e. `Grep` for a readable `src/tools/GrepTool/GrepTool.ts`. */
+async function presentToolModules(srcDir: string): Promise<Set<string>> {
+	const present = new Set<string>();
+	const toolsDir = join(srcDir, "tools");
+	let dirs: Dirent[];
+	try {
+		dirs = await readdir(toolsDir, { withFileTypes: true });
+	} catch {
+		return present;
+	}
+	for (const d of dirs) {
+		if (!d.isDirectory() || !d.name.endsWith("Tool")) continue;
+		const base = d.name.slice(0, -"Tool".length);
+		if (existsSync(join(toolsDir, d.name, `${base}Tool.ts`))) present.add(base);
+	}
+	return present;
+}
+
 export async function assembleAndVerify(
 	plan: HarnessPlan,
 	outputDir: string,
@@ -94,7 +115,8 @@ export async function assembleAndVerify(
 
 	await writeFile(join(srcDir, "main.tsx"), MAIN_ENTRY_TEMPLATE(plan));
 	await writeFile(join(srcDir, "Tool.ts"), TOOL_TYPESCRIPT);
-	await writeFile(join(srcDir, "tools.ts"), TOOLS_REGISTRY(plan));
+	// NOTE: src/tools.ts is written LATER (after every tool-file writer has run)
+	// so the registry can be built from what is actually on disk.
 	await writeFile(join(srcDir, "commands.ts"), COMMANDS_REGISTRY(plan));
 	await writeFile(join(srcDir, "services/provider.ts"), PROVIDER_SERVICE);
 	await writeFile(
@@ -181,6 +203,16 @@ export async function assembleAndVerify(
 		await mkdir(join(abs, ".."), { recursive: true });
 		await writeFile(abs, f.code);
 	}
+
+	// Registry LAST: every writer above has finished, so src/tools/ is ground
+	// truth for which tool modules exist. Emitting an entry for a tool whose file
+	// was never generated (no template in generateToolFiles, or a dropped bespoke
+	// tool from the GENERATE stage) produced a "Cannot find module" that failed
+	// the whole build.
+	await writeFile(
+		join(srcDir, "tools.ts"),
+		TOOLS_REGISTRY(plan, await presentToolModules(srcDir)),
+	);
 
 	// Note: system.md is written once above (.<plan.name>/system.md from
 	// plan.systemPrompt = buildAgentSystemPrompt). The old second write here
