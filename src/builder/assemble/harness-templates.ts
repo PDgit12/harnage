@@ -1604,8 +1604,17 @@ export class LoopEngine {
 
   getMessages(): Array<Record<string, unknown>> { return this.messages; }
 
+  /** Model calls and tool calls used by the LAST run. Total task time is
+   *  turns x per-turn cost, and the harness only controls the first factor —
+   *  so this is the number that says whether the scaffold is earning its keep.
+   *  Without it a slow run is indistinguishable from a wasteful one. */
+  public lastTurns = 0;
+  public lastToolCalls = 0;
+
   async run(goal: string): Promise<string> {
     const startedAt = Date.now();
+    this.lastTurns = 0;
+    this.lastToolCalls = 0;
     audit("run_start", { goal: goal.slice(0, 300), model: this.config.model, tier: this.profile.tier });
     this.activeGoal = goal;
     this.messages.push({ role: "user", content: goal });
@@ -1789,6 +1798,7 @@ export class LoopEngine {
 
     while (true) {
       iteration++;
+      this.lastTurns++;
       const verdict = this.safety.check(iteration, CONFIG.maxIterations);
       if (verdict.shouldStop) return \`Stopped: \${verdict.reason}\`;
 
@@ -2044,6 +2054,7 @@ export class LoopEngine {
 
     while (true) {
       iteration++;
+      this.lastTurns++;
       const verdict = this.safety.check(iteration, CONFIG.maxIterations);
       if (verdict.shouldStop) return \`Stopped: \${verdict.reason}\`;
 
@@ -2284,6 +2295,7 @@ export class LoopEngine {
       sameCallCount = 0;
 
       toolsUsed++;
+      this.lastToolCalls++;
       this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
       this.onEvent?.({ type: "tool_use", toolName: name, toolInput: args });
 

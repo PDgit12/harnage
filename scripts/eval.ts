@@ -307,6 +307,10 @@ console.log(`Suite:    ${suite} — ${selected.length} tasks × ${k} sample(s)\n
 interface Sample {
 	pass: boolean;
 	ms: number;
+	/** Model calls and tool calls the run consumed. Latency alone cannot tell a
+	 *  slow model from a wasteful scaffold; turns can. */
+	turns: number;
+	toolCalls: number;
 	detail: string;
 	judged: boolean;
 	/** Provider/transport failure — the task never got a verdict, so it is not
@@ -325,6 +329,8 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 	const started = performance.now();
 	let out = "";
 	let err: string | undefined;
+	let turns = 0;
+	let toolCalls = 0;
 	try {
 		const engine = new LoopEngine({
 			tools,
@@ -334,6 +340,12 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 			persistSession: false,
 		});
 		out = await engine.run(task.goal);
+		const counted = engine as unknown as {
+			lastTurns?: number;
+			lastToolCalls?: number;
+		};
+		turns = counted.lastTurns ?? 0;
+		toolCalls = counted.lastToolCalls ?? 0;
 	} catch (e) {
 		err = e instanceof Error ? e.message : String(e);
 	}
@@ -349,12 +361,14 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 			ms,
 			detail: failureText,
 			judged: false,
+			turns,
+			toolCalls,
 			errored: isInfraError(failureText),
 		};
 
 	// Deterministic check GATES: a judge never overrides a factual miss.
 	if (task.check && !task.check(out, fx)) {
-		return { pass: false, ms, detail: out, judged: false };
+		return { pass: false, ms, detail: out, judged: false, turns, toolCalls };
 	}
 	if (task.rubric && judgeProvider) {
 		const v = await judgeAnswer(judgeProvider, task, out);
@@ -363,6 +377,8 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 			ms,
 			detail: v.pass ? out : `judge: ${v.reason}`,
 			judged: !v.errored,
+			turns,
+			toolCalls,
 		};
 	}
 	// No judge available: a judge-only task can't be scored honestly, so it is
@@ -373,9 +389,11 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 			ms,
 			detail: "skipped — no judge available",
 			judged: false,
+			turns,
+			toolCalls,
 		};
 	}
-	return { pass: true, ms, detail: out, judged: false };
+	return { pass: true, ms, detail: out, judged: false, turns, toolCalls };
 }
 
 const originalCwd = process.cwd();
@@ -388,6 +406,7 @@ let consecutiveInfra = 0;
 let aborted = false;
 let scoredTasks = 0;
 let erroredTasks = 0;
+const allSamples: Sample[] = [];
 const byCat: Record<string, { pass: number; total: number }> = {};
 const byDiff: Record<string, { pass: number; total: number }> = {};
 
@@ -413,6 +432,8 @@ for (const task of selected) {
 			difficulty: task.difficulty,
 			sample: i,
 			pass: samples[i].pass,
+			turns: samples[i].turns,
+			toolCalls: samples[i].toolCalls,
 			errored: samples[i].errored ?? false,
 			judged: samples[i].judged,
 			ms: samples[i].ms,
@@ -435,6 +456,7 @@ for (const task of selected) {
 		consecutiveInfra = 0;
 	}
 
+	allSamples.push(...samples);
 	const first = samples[0];
 	const any = samples.some((s) => s.pass);
 	if (first.errored) {
@@ -488,6 +510,17 @@ if (erroredTasks)
 		`${erroredTasks} task(s) excluded — provider error, not a verdict on the model`,
 	);
 if (k > 1) console.log(`${passAtK}/${scoredTasks} passed (pass@${k})`);
+// Turns are the harness's lever: total task time is turns x per-turn cost, and
+// only the first factor is ours. A fall here at equal pass-rate is a real win.
+const scoredSamples = allSamples.filter((s) => !s.errored && s.turns > 0);
+if (scoredSamples.length) {
+	const turns = scoredSamples.map((s) => s.turns).sort((a, b) => a - b);
+	const calls = scoredSamples.map((s) => s.toolCalls).sort((a, b) => a - b);
+	const med = (a: number[]) => a[Math.floor(a.length / 2)];
+	console.log(
+		`  efficiency    ${med(turns)} turns/task (median) · ${med(calls)} tool calls · ${(scoredSamples.reduce((t, s) => t + s.ms, 0) / scoredSamples.length / 1000).toFixed(1)}s mean`,
+	);
+}
 console.log(`  by category   ${line(byCat)}`);
 console.log(`  by difficulty ${line(byDiff)}`);
 if (calibration) {
