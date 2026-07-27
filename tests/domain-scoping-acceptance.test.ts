@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderAcceptanceMd } from "../src/builder/acceptance-run";
-import { ENGINE_TEMPLATE } from "../src/builder/assemble/harness-templates";
+import {
+	ENGINE_TEMPLATE,
+	HARNESS_PERMISSIONS,
+} from "../src/builder/assemble/harness-templates";
 import type { HarnessPlan } from "../src/builder/index";
 import {
 	type AcceptanceTask,
@@ -388,5 +391,67 @@ describe("typed per-tool argument grammar", () => {
 		// A host that can't compile a oneOf grammar must degrade, not kill the run.
 		expect(engine).toMatch(/format\|schema\|grammar\|oneOf/);
 		expect(engine).toContain("useTypedArgs = false");
+	});
+});
+
+// The single highest-value bug found today, and the one most likely to recur:
+// a permissions matcher that refused honest work while stopping nothing. Under
+// an explicit `bash(*)` grant, "echo HELLO > f.txt" was denied with the message
+// "needs an allow rule ... bash(*)" — add the rule you already have. It made a
+// harness bug look like a small model refusing to act, and cost most of a day.
+describe("bash permission matcher", () => {
+	const perms = HARNESS_PERMISSIONS({
+		name: "e",
+		description: "an agent",
+		systemPrompt: "",
+		tools: ["bash"],
+	} as unknown as HarnessPlan);
+
+	const ruleMatches = (() => {
+		const m = perms.match(
+			/function ruleMatches\(rule: PermissionRule, toolName: string, target: string\): boolean \{([\s\S]*?)\n\}/,
+		);
+		return new Function(
+			"rule",
+			"toolName",
+			"target",
+			(m as RegExpMatchArray)[1],
+		) as (
+			r: { pattern: string; allow: boolean },
+			t: string,
+			g: string,
+		) => boolean;
+	})();
+
+	const wildcard = { pattern: "bash(*)", allow: true };
+	const scoped = { pattern: "bash(git *)", allow: true };
+
+	it("honours an explicit allow-everything grant, redirects included", () => {
+		expect(ruleMatches(wildcard, "bash", "echo 'HELLO' > hello.txt")).toBe(
+			true,
+		);
+		expect(ruleMatches(wildcard, "bash", "cat a.txt | wc -l")).toBe(true);
+		expect(ruleMatches(wildcard, "bash", "touch t.txt")).toBe(true);
+	});
+
+	it("still blocks chaining out of a SCOPED grant", () => {
+		// This is what the guard exists for and must keep doing.
+		expect(ruleMatches(scoped, "bash", "git status; rm -rf /")).toBe(false);
+		expect(ruleMatches(scoped, "bash", "git log > /etc/passwd")).toBe(false);
+		expect(ruleMatches(scoped, "bash", "git $(whoami)")).toBe(false);
+		// A plain in-scope command still matches.
+		expect(ruleMatches(scoped, "bash", "git status")).toBe(true);
+		// Out of scope stays out of scope.
+		expect(ruleMatches(scoped, "bash", "npm publish")).toBe(false);
+	});
+
+	it("does not apply the bash guard to other tools", () => {
+		expect(
+			ruleMatches(
+				{ pattern: "file_write(*)", allow: true },
+				"file_write",
+				"a>b.txt",
+			),
+		).toBe(true);
 	});
 });

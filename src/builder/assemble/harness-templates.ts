@@ -476,10 +476,17 @@ function ruleMatches(rule: PermissionRule, toolName: string, target: string): bo
   if (!m) return false;
   if (m[1] !== toolName && m[1] !== "*") return false;
   const isBash = toolName === "bash";
-  // Bash chaining/redirection defeats the intent of a single-command grant.
-  if (isBash && target && /[;&|<>\\u0060\\n]|\\$\\(/.test(target)) return false;
   const glob = m[2];
-  if (glob === undefined || glob === "" || glob === "*" || glob === "**") return true;
+  const isWildcardGrant = glob === undefined || glob === "" || glob === "*" || glob === "**";
+  // Chaining/redirection defeats the intent of a SCOPED grant: bash(git *)
+  // must not authorise "git status; rm -rf /". Against an explicit
+  // allow-everything grant it buys nothing — bash(*) already permits
+  // sh -c 'rm -rf /', which contains no metacharacter at all — while breaking
+  // honest work: "echo HELLO > f.txt" was refused under bash(*) and reported as
+  // "needs an allow rule ... bash(*)", i.e. add the rule you already have.
+  // That silently failed every write-via-shell task.
+  if (isBash && !isWildcardGrant && target && /[;&|<>\\u0060\\n]|\\$\\(/.test(target)) return false;
+  if (isWildcardGrant) return true;
   const escaped = glob.replace(/[.+^\${}()|[\\]\\\\]/g, "\\\\$&");
   // Bash args routinely contain "/", so "*" stays greedy there (the chaining
   // guard above is what keeps a bash wildcard safe). Path globs get segment
@@ -1193,6 +1200,25 @@ function requestedArtifact(goal: string): string | null {
   return path;
 }
 
+// How many times a refused outcome may be re-forced. Bounded on purpose: an
+// unbounded loop on a model that cannot comply burns the whole iteration budget
+// and ends in a safety stop instead of an answer. Three escalating attempts is
+// where the observed dodge either breaks or is genuinely beyond the model.
+const MAX_OUTCOME_FORCES = 3;
+
+/**
+ * The exact text a goal says a file must contain, when it says so literally
+ * ("containing exactly the text HELLO", 'containing "HELLO"'). Used only for the
+ * final escalation, where the model is handed the complete JSON to emit — at
+ * that point leaving the content as a placeholder would just invite another
+ * invention. Returns null when the goal does not pin the content down.
+ */
+function requiredContent(goal: string): string | null {
+  const m = goal.match(/contain(?:ing|s)?\\s+(?:exactly\\s+)?(?:the\\s+)?(?:text|string|content)?\\s*["'\u201c]([^"'\u201d]{1,200})["'\u201d]/i)
+    ?? goal.match(/contain(?:ing|s)?\\s+exactly\\s+(?:the\\s+)?(?:text|string)?\\s*([^\\s.,]{1,80})/i);
+  return m?.[1]?.trim() || null;
+}
+
 interface Decision { action: "tool" | "final"; tool?: string; args?: Record<string, unknown>; answer?: string; }
 
 /** Parse a (possibly prose-wrapped) decision object; null if unrecoverable. */
@@ -1253,15 +1279,21 @@ function looksNonProse(s: string): boolean {
   return false;
 }
 
+// One rule per line, each a single concrete action. A small model tracks a
+// short numbered list far better than the same content as a paragraph — the
+// prose version buried the path rule mid-sentence, where it was ignored.
+// Ordered by how often it is violated, because early lines survive truncation.
 const DECISION_RULES =
-  'You act by returning ONE JSON object and nothing else. ' +
-  'To use a tool: {"action":"tool","tool":"<name>","args":{...}}. ' +
-  'To give your final answer: {"action":"final","answer":"<text>"}. ' +
-  'Do NOT describe what you will do — return the tool action. One tool per turn. ' +
-  'NEVER answer from memory or guess a result — you MUST use a tool to inspect or ' +
-  'change real files before answering. ' +
-  'Example — to read a file, return exactly: ' +
-  '{"action":"tool","tool":"file_read","args":{"path":"src/index.ts"}}';
+  'RULES:\\n' +
+  '1. Return ONE JSON object. Nothing else.\\n' +
+  '2. Use a tool: {"action":"tool","tool":"<name>","args":{...}}\\n' +
+  '3. Answer: {"action":"final","answer":"<text>"}\\n' +
+  '4. Use the EXACT paths listed in the working directory message. Never invent a path.\\n' +
+  '5. Never say a file is missing unless it is absent from that list.\\n' +
+  '6. One tool per turn. Wait for the result.\\n' +
+  '7. Never guess a file\\'s contents. Read it first.\\n' +
+  '8. Do not describe what you will do. Do it.\\n' +
+  'EXAMPLE: {"action":"tool","tool":"file_read","args":{"path":"a.ts"}}';
 
 // isSmallTalk() already skips the domain pipeline's forced-procedure text, but
 // decisionSystem() was still sending DECISION_RULES's "you MUST use a tool"
@@ -1903,7 +1935,7 @@ export class LoopEngine {
     // The artifact this goal demands, if it names one. Checked before a final
     // answer is accepted — see the outcome block below.
     const wanted = requestedArtifact(goal);
-    let outcomeForced = false;
+    let outcomeForced = 0;
     // Set for exactly one turn after an outcome refusal.
     let forceActNow = false;
     // Per-tool typed args (a oneOf grammar). Strictly stronger than the flat
@@ -1932,10 +1964,36 @@ export class LoopEngine {
     if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
         !this.messages.some(m => typeof m.content === "string" && m.content.startsWith("Files in the working directory:"))) {
       try {
-        const entries = (await import("node:fs")).readdirSync(process.cwd());
-        for (const e of entries) this.knownFiles.add(e.toLowerCase());
-        const listing = entries.slice(0, 50).join(", ") + (entries.length > 50 ? ", …" : "");
-        this.messages.unshift({ role: "user", content: \`Files in the working directory: \${listing}. Read paths relative to this directory — do NOT assume a src/ subfolder.\` });
+        // RECURSIVE, not one level. A flat listing names the directory "src"
+        // and leaves the model to guess what is inside it — which it does,
+        // wrongly, then reports a real file as missing ("src/util/format.ts
+        // does not exist" for a file that does exist). Handing over the actual
+        // nested paths removes the guess entirely. Bounded so a big repo can't
+        // blow the small-model context.
+        const { readdirSync } = await import("node:fs");
+        const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
+        const paths: string[] = [];
+        const walk = (rel: string, depth: number): void => {
+          if (depth > 3 || paths.length >= 80) return;
+          let entries: Array<{ name: string; isDirectory(): boolean }>;
+          try { entries = readdirSync(rel ? \`\${process.cwd()}/\${rel}\` : process.cwd(), { withFileTypes: true }); }
+          catch { return; }
+          for (const e of entries) {
+            if (paths.length >= 80) return;
+            if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+            const p = rel ? \`\${rel}/\${e.name}\` : e.name;
+            if (e.isDirectory()) walk(p, depth + 1);
+            else paths.push(p);
+          }
+        };
+        walk("", 1);
+        for (const p of paths) {
+          this.knownFiles.add(p.toLowerCase());
+          const base = p.split("/").pop();
+          if (base) this.knownFiles.add(base.toLowerCase());
+        }
+        const listing = paths.join(", ") + (paths.length >= 80 ? ", …" : "");
+        this.messages.unshift({ role: "user", content: \`Files in the working directory: \${listing}. These are the ONLY files that exist. Use these exact paths, relative to the working directory. Do NOT invent a path or a folder that is not in this list.\` });
       } catch { /* fs unavailable — skip grounding */ }
     }
 
@@ -1996,6 +2054,46 @@ export class LoopEngine {
       this.nudged = false;
 
       if (decision.action === "final") {
+        // OUTCOME CHECK: the goal named a file to produce and that file is not
+        // there. No amount of prose makes that a completed task, so the answer
+        // is refused and the next turn is GRAMMAR-FORCED to act — "final" is
+        // removed from the schema, so the model cannot stop again. This is the
+        // one backstop that catches the observed failure where the model used
+        // some other tool first, which every toolsUsed===0 check misses.
+        if (wanted && outcomeForced < MAX_OUTCOME_FORCES && this.tools.length > 0) {
+          // Existence is not enough. Observed: after the write was refused, the
+          // model ran "touch hello.txt", which satisfied an exists-only check
+          // and let a FALSE success through — the file was empty. When the goal
+          // pins the content, the content is the outcome.
+          let produced = false;
+          try {
+            const { existsSync, readFileSync } = await import("node:fs");
+            const abs = (await import("node:path")).resolve(process.cwd(), wanted);
+            if (existsSync(abs)) {
+              const need = requiredContent(goal);
+              produced = !need || readFileSync(abs, "utf-8").includes(need);
+            }
+          } catch { produced = true; /* can't check — don't block on it */ }
+          if (!produced) {
+            outcomeForced++;
+            forceActNow = true;
+            this.safety.recordFailure();
+            this.onEvent?.({ type: "status", content: \`forcing creation of \${wanted} (\${outcomeForced}/\${MAX_OUTCOME_FORCES})\` });
+            // ESCALATING, because one polite refusal does not work: the model
+            // re-emits the same "run echo ... > file" prose. Each attempt
+            // removes another degree of freedom, ending with the literal JSON
+            // to echo back — at which point there is nothing left to invent.
+            const wantedContent = requiredContent(goal);
+            const nudge = outcomeForced === 1
+              ? \`The goal was to create "\${wanted}", and that file does not exist. Describing a shell command is not creating it. Call the file_write tool now.\`
+              : outcomeForced === 2
+                ? \`"\${wanted}" STILL does not exist. You are not talking to a human who will run your command — YOU must write the file. Use tool "file_write" with args {"path":"\${wanted}","content":"<the exact content the goal asked for>"}.\`
+                : \`Return EXACTLY this and nothing else: {"action":"tool","tool":"file_write","args":{"path":"\${wanted}","content":\${JSON.stringify(wantedContent ?? "<the content the goal specified>")}}}\`;
+            this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+            this.messages.push({ role: "user", content: nudge });
+            continue;
+          }
+        }
         // Repeated-final termination guard: if the model emits the SAME final
         // answer 3 times (across nudge-driven retries), accept it and stop —
         // the one-shot nudges are spent and re-prompting won't change it, so
@@ -2006,6 +2104,16 @@ export class LoopEngine {
           sameFinalCount++;
           if (sameFinalCount >= 2) {
             this.safety.recordFailure();
+            // Never release an answer we have PROVEN wrong. The outcome check
+            // above has already refused this one MAX_OUTCOME_FORCES times for a
+            // file that still does not exist — repeating it does not make it
+            // true, so report the failure instead of the model's claim.
+            if (outcomeForced >= MAX_OUTCOME_FORCES) {
+              const failure = \`Could not create "\${wanted}". The model described a shell command instead of writing the file, and repeated that after \${MAX_OUTCOME_FORCES} corrections. Nothing was written.\`;
+              this.messages.push({ role: "assistant", content: failure });
+              if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
+              return failure;
+            }
             const settled = unwrapFinal(decision.answer ?? "");
             this.messages.push({ role: "assistant", content: settled });
             if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
@@ -2082,29 +2190,6 @@ export class LoopEngine {
             ? \`The working directory actually contains these files: \${listing}. Do NOT assume a subdirectory like src/ — read paths relative to the current directory. If the item you called missing is in that list, read it and correct your answer; only conclude absence if it is truly not listed.\`
             : "Before finalizing: verify with a tool, reading paths relative to the current directory (do not assume a src/ prefix). Correct your answer if the item actually exists." });
           continue;
-        }
-        // OUTCOME CHECK: the goal named a file to produce and that file is not
-        // there. No amount of prose makes that a completed task, so the answer
-        // is refused and the next turn is GRAMMAR-FORCED to act — "final" is
-        // removed from the schema, so the model cannot stop again. This is the
-        // one backstop that catches the observed failure where the model used
-        // some other tool first, which every toolsUsed===0 check misses.
-        if (wanted && !outcomeForced && this.tools.length > 0) {
-          let produced = false;
-          try {
-            produced = (await import("node:fs")).existsSync(
-              (await import("node:path")).resolve(process.cwd(), wanted),
-            );
-          } catch { produced = true; /* can't check — don't block on it */ }
-          if (!produced) {
-            outcomeForced = true;
-            forceActNow = true;
-            this.safety.recordFailure();
-            this.onEvent?.({ type: "status", content: \`forcing creation of \${wanted}\` });
-            this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
-            this.messages.push({ role: "user", content: \`The goal was to create "\${wanted}", and that file does not exist yet. Describing how to create it is not doing it. Call the file_write tool now with path "\${wanted}" and the exact required content.\` });
-            continue;
-          }
         }
         // Final-with-intent: small models "finish" by ANNOUNCING the next step
         // ("Next, I will extract commit messages...") instead of doing it.
