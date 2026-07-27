@@ -338,13 +338,18 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 		err = e instanceof Error ? e.message : String(e);
 	}
 	const ms = Math.round(performance.now() - started);
-	if (err)
+	// The engine RETURNS provider failures as a string rather than throwing, so
+	// a thrown-error-only check misses them and scores a rate limit as a wrong
+	// answer — the exact false signal this exclusion exists to prevent.
+	const returnedError = /^\s*Error:/i.test(out) ? out : "";
+	const failureText = err ?? returnedError;
+	if (failureText)
 		return {
 			pass: false,
 			ms,
-			detail: err,
+			detail: failureText,
 			judged: false,
-			errored: isInfraError(err),
+			errored: isInfraError(failureText),
 		};
 
 	// Deterministic check GATES: a judge never overrides a factual miss.

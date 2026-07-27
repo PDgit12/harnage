@@ -162,14 +162,21 @@ export async function runAcceptance(
 			const abs = join(fixture, rel);
 			return existsSync(abs) ? readFileSync(abs, "utf-8") : null;
 		};
-		const errored = Boolean(error) && isInfraError(error ?? "");
-		const pass = !error && grade(task, answer, readFixtureFile);
+		// The engine RETURNS provider failures as a string ("Error: openai 429: …")
+		// instead of throwing, so checking only the thrown error missed every one
+		// of them: a rate-limited run reported 0/4 BELOW BAR and advised the user
+		// to buy a bigger model. Inspect the answer too.
+		const returnedError = /^\s*(Error|Stopped):/i.test(answer) ? answer : "";
+		const failureText = error ?? returnedError;
+		const errored = Boolean(failureText) && isInfraError(failureText);
+		const pass =
+			!error && !returnedError && grade(task, answer, readFixtureFile);
 		results.push({
 			id: task.id,
 			pass,
 			ms,
 			errored,
-			detail: error ?? answer.replace(/\s+/g, " ").slice(0, 160),
+			detail: (failureText || answer).replace(/\s+/g, " ").slice(0, 160),
 		});
 		const mark = errored ? "SKIP" : pass ? "PASS" : "FAIL";
 		onProgress?.(

@@ -596,9 +596,17 @@ async function runBuildAcceptance(
 		return report;
 	}
 
+	// Say so plainly when the battery runs on a DIFFERENT model than the harness
+	// was built for — it happens whenever the chosen model is not installed, and
+	// a score attributed to the wrong model is worse than no score.
+	const builtFor = plan.defaultLocalModel;
+	const mismatch = builtFor && runtime.model !== builtFor;
 	onProgress?.({
 		stage: "verifying",
 		message: `Acceptance: ${tasks.length} tasks on ${runtime.model}...`,
+		detail: mismatch
+			? `NOTE: this harness was built for ${builtFor}, which is not installed. Pull it (ollama pull ${builtFor}) and re-run to score the model you will actually use.`
+			: undefined,
 	});
 	const report = await runAcceptance(outputDir, tasks, runtime, (line) =>
 		onProgress?.({ stage: "verifying", message: line }),
