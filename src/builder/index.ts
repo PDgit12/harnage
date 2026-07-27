@@ -578,10 +578,8 @@ async function runBuildAcceptance(
 		// 5-minute provider timeout authoring 16 tasks and the build shipped with
 		// no acceptance at all. Retry small — a 6-task battery is far better than
 		// none, and a fast API brain never reaches this path.
-		const slow = /timed? ?out|abort/i.test(
-			firstErr instanceof Error ? firstErr.message : String(firstErr),
-		);
-		if (slow && want > 6) {
+		const { shouldRetrySmaller } = await import("./acceptance-run");
+		if (shouldRetrySmaller(firstErr, want)) {
 			onProgress?.({
 				stage: "verifying",
 				message: `Build brain too slow for ${want} tasks — retrying with 6...`,
