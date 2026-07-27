@@ -16,7 +16,13 @@
  *
  * See docs/benchmarks.md for methodology and how to read the report.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -51,39 +57,80 @@ interface Task {
 }
 
 const TASKS: Task[] = [
-	{ id: "T1", category: "File ops", summary: "Create hello.txt containing exactly HELLO in the fixture dir." },
-	{ id: "T2", category: "Search", summary: "Read a.ts and report what it exports (greet)." },
-	{ id: "T3", category: "Multi-step goal", summary: "Find the largest .ts file among 3 files and show its first lines." },
-	{ id: "T4", category: "Memory recall", summary: "Seed a fact in one session, recall it correctly in a fresh session." },
-	{ id: "T5", category: "Resume-after-kill", summary: "Crash mid-task; verify session state on disk is resumable." },
+	{
+		id: "T1",
+		category: "File ops",
+		summary: "Create hello.txt containing exactly HELLO in the fixture dir.",
+	},
+	{
+		id: "T2",
+		category: "Search",
+		summary: "Read a.ts and report what it exports (greet).",
+	},
+	{
+		id: "T3",
+		category: "Multi-step goal",
+		summary:
+			"Find the largest .ts file among 3 files and show its first lines.",
+	},
+	{
+		id: "T4",
+		category: "Memory recall",
+		summary:
+			"Seed a fact in one session, recall it correctly in a fresh session.",
+	},
+	{
+		id: "T5",
+		category: "Resume-after-kill",
+		summary: "Crash mid-task; verify session state on disk is resumable.",
+	},
 ];
 
 if (dryRun) {
 	console.log("\nbench-harness — dry run (no model executed)\n");
-	console.log("Battery: harness (generated, local Ollama) vs control (raw Ollama chat, no tools)\n");
+	console.log(
+		"Battery: harness (generated, local Ollama) vs control (raw Ollama chat, no tools)\n",
+	);
 	for (const t of TASKS) {
 		console.log(`  ${t.id}  ${t.category.padEnd(18)} ${t.summary}`);
 	}
-	console.log("\nValidating offline build pipeline (no model needed for chassis generation)...");
+	console.log(
+		"\nValidating offline build pipeline (no model needed for chassis generation)...",
+	);
 	const buildRoot = await mkdtemp(join(tmpdir(), "bench-harness-dry-"));
 	try {
-		const build = await buildHarness("a codebase analysis and file agent that inspects and edits a project", buildRoot);
+		const build = await buildHarness(
+			"a codebase analysis and file agent that inspects and edits a project",
+			buildRoot,
+			undefined,
+			{ characterize: false, acceptance: false },
+		);
 		if (!build.success) {
 			console.error("build failed:", build.errors);
 			process.exit(1);
 		}
 		const gen = build.outputDir;
-		for (const f of ["src/tools.ts", "src/engine.ts", "src/profiles.ts", "src/memory.ts", "src/session.ts"]) {
+		for (const f of [
+			"src/tools.ts",
+			"src/engine.ts",
+			"src/profiles.ts",
+			"src/memory.ts",
+			"src/session.ts",
+		]) {
 			if (!existsSync(join(gen, f))) {
 				console.error(`missing generated file: ${f}`);
 				process.exit(1);
 			}
 		}
-		console.log(`✓ generated harness at ${gen} has tools.ts, engine.ts, profiles.ts, memory.ts, session.ts`);
+		console.log(
+			`✓ generated harness at ${gen} has tools.ts, engine.ts, profiles.ts, memory.ts, session.ts`,
+		);
 	} finally {
 		await rm(buildRoot, { recursive: true, force: true });
 	}
-	console.log(`\n${TASKS.length} tasks × 2 modes (harness, control) = ${TASKS.length * 2} runs when executed for real.`);
+	console.log(
+		`\n${TASKS.length} tasks × 2 modes (harness, control) = ${TASKS.length * 2} runs when executed for real.`,
+	);
 	console.log("Plan OK — exit 0.\n");
 	process.exit(0);
 }
@@ -91,11 +138,16 @@ if (dryRun) {
 // ---- real run below ----
 
 function writeFixture(dir: string): void {
-	writeFileSync(join(dir, "a.ts"), "export function greet(): string {\n  return 'hi';\n}\n");
+	writeFileSync(
+		join(dir, "a.ts"),
+		"export function greet(): string {\n  return 'hi';\n}\n",
+	);
 	writeFileSync(join(dir, "b.js"), "module.exports = { ok: true };\n");
 	const big =
 		"// LARGEST\n" +
-		Array.from({ length: 80 }, (_, i) => `export const v${i} = ${i};`).join("\n") +
+		Array.from({ length: 80 }, (_, i) => `export const v${i} = ${i};`).join(
+			"\n",
+		) +
 		"\n";
 	writeFileSync(join(dir, "big.ts"), big);
 }
@@ -111,24 +163,40 @@ async function rawChat(prompt: string): Promise<string> {
 			stream: false,
 		}),
 	});
-	if (!res.ok) throw new Error(`ollama ${res.status}: ${await res.text().catch(() => "")}`);
+	if (!res.ok)
+		throw new Error(
+			`ollama ${res.status}: ${await res.text().catch(() => "")}`,
+		);
 	const json = (await res.json()) as { message?: { content?: string } };
 	return json.message?.content ?? "";
 }
 
-async function timed<T>(fn: () => Promise<T>): Promise<{ result?: T; err?: string; secs: number }> {
+async function timed<T>(
+	fn: () => Promise<T>,
+): Promise<{ result?: T; err?: string; secs: number }> {
 	const started = performance.now();
 	try {
 		const result = await fn();
-		return { result, secs: Math.round((performance.now() - started) / 100) / 10 };
+		return {
+			result,
+			secs: Math.round((performance.now() - started) / 100) / 10,
+		};
 	} catch (e) {
-		return { err: e instanceof Error ? e.message : String(e), secs: Math.round((performance.now() - started) / 100) / 10 };
+		return {
+			err: e instanceof Error ? e.message : String(e),
+			secs: Math.round((performance.now() - started) / 100) / 10,
+		};
 	}
 }
 
 console.log(`\nBuilding a generated harness (offline chassis)...`);
 const buildRoot = await mkdtemp(join(tmpdir(), "bench-harness-build-"));
-const build = await buildHarness("a codebase analysis and file agent that inspects and edits a project", buildRoot);
+const build = await buildHarness(
+	"a codebase analysis and file agent that inspects and edits a project",
+	buildRoot,
+	undefined,
+	{ characterize: false, acceptance: false },
+);
 if (!build.success) {
 	console.error("build failed:", build.errors);
 	process.exit(1);
@@ -144,7 +212,9 @@ const { getAllTools } = (await import(join(gen, "src/tools.ts"))) as {
 	getAllTools: () => Promise<Array<{ name: string }>>;
 };
 const { LoopEngine } = (await import(join(gen, "src/engine.ts"))) as {
-	LoopEngine: new (cfg: Record<string, unknown>) => { run(goal: string): Promise<string> };
+	LoopEngine: new (
+		cfg: Record<string, unknown>,
+	) => { run(goal: string): Promise<string> };
 };
 const { resolveProfile } = (await import(join(gen, "src/profiles.ts"))) as {
 	resolveProfile: (m: string, ctx?: number) => Record<string, unknown>;
@@ -152,14 +222,29 @@ const { resolveProfile } = (await import(join(gen, "src/profiles.ts"))) as {
 const { MemoryStore } = (await import(join(gen, "src/memory.ts"))) as {
 	MemoryStore: new () => { saveFact(subject: string, fact: string): void };
 };
-const { saveSession, loadSession } = (await import(join(gen, "src/session.ts"))) as {
-	saveSession: (messages: Array<Record<string, unknown>>, meta?: { goal?: string; done?: boolean }) => Promise<void>;
-	loadSession: () => { messages: unknown[]; goal?: string; done?: boolean } | null;
+const { saveSession, loadSession } = (await import(
+	join(gen, "src/session.ts")
+)) as {
+	saveSession: (
+		messages: Array<Record<string, unknown>>,
+		meta?: { goal?: string; done?: boolean },
+	) => Promise<void>;
+	loadSession: () => {
+		messages: unknown[];
+		goal?: string;
+		done?: boolean;
+	} | null;
 };
 
 const allTools = await getAllTools();
 const profile = resolveProfile(model!, 8192);
-const providerConfig = { type: "ollama", model, baseUrl, maxTokens: 4096, contextTokens: 8192 };
+const providerConfig = {
+	type: "ollama",
+	model,
+	baseUrl,
+	maxTokens: 4096,
+	contextTokens: 8192,
+};
 const policy = {
 	mode: "default" as const,
 	rules: [
@@ -170,20 +255,38 @@ const policy = {
 };
 
 function newEngine(persistSession = true) {
-	return new LoopEngine({ tools: allTools, providerConfig, profile, policy, persistSession });
+	return new LoopEngine({
+		tools: allTools,
+		providerConfig,
+		profile,
+		policy,
+		persistSession,
+	});
 }
 
 async function runT1(mode: Mode, fixture: string): Promise<TaskOutcome> {
-	const goal = "Create a file named hello.txt containing exactly the text HELLO in the current directory.";
+	const goal =
+		"Create a file named hello.txt containing exactly the text HELLO in the current directory.";
 	process.chdir(fixture);
 	if (mode === "harness") {
 		const { secs, err } = await timed(() => newEngine(false).run(goal));
-		const ok = !err && existsSync(join(fixture, "hello.txt")) && /HELLO/.test(readFileSync(join(fixture, "hello.txt"), "utf-8"));
-		return { pass: ok, secs, detail: err ?? (ok ? "file written" : "file missing/wrong content") };
+		const ok =
+			!err &&
+			existsSync(join(fixture, "hello.txt")) &&
+			/HELLO/.test(readFileSync(join(fixture, "hello.txt"), "utf-8"));
+		return {
+			pass: ok,
+			secs,
+			detail: err ?? (ok ? "file written" : "file missing/wrong content"),
+		};
 	}
 	const { secs, err } = await timed(() => rawChat(goal));
 	const ok = !err && existsSync(join(fixture, "hello.txt"));
-	return { pass: ok, secs, detail: err ?? "raw chat has no filesystem tool — cannot write a real file" };
+	return {
+		pass: ok,
+		secs,
+		detail: err ?? "raw chat has no filesystem tool — cannot write a real file",
+	};
 }
 
 async function runT2(mode: Mode, fixture: string): Promise<TaskOutcome> {
@@ -196,38 +299,59 @@ async function runT2(mode: Mode, fixture: string): Promise<TaskOutcome> {
 	}
 	const { result, secs, err } = await timed(() => rawChat(goal));
 	const ok = !err && /greet/i.test(result ?? "");
-	return { pass: ok, secs, detail: err ?? "raw chat cannot read the real a.ts — any match is a coincidence" };
+	return {
+		pass: ok,
+		secs,
+		detail:
+			err ?? "raw chat cannot read the real a.ts — any match is a coincidence",
+	};
 }
 
 async function runT3(mode: Mode, fixture: string): Promise<TaskOutcome> {
-	const goal = "Find the largest .ts file in the current directory and show its first few lines.";
+	const goal =
+		"Find the largest .ts file in the current directory and show its first few lines.";
 	process.chdir(fixture);
 	if (mode === "harness") {
 		const { result, secs, err } = await timed(() => newEngine(false).run(goal));
-		const ok = !err && (/LARGEST/.test(result ?? "") || /big\.ts/.test(result ?? ""));
+		const ok =
+			!err && (/LARGEST/.test(result ?? "") || /big\.ts/.test(result ?? ""));
 		return { pass: ok, secs, detail: err ?? (result ?? "").slice(0, 120) };
 	}
 	const { result, secs, err } = await timed(() => rawChat(goal));
-	const ok = !err && (/LARGEST/.test(result ?? "") || /big\.ts/.test(result ?? ""));
-	return { pass: ok, secs, detail: err ?? "raw chat cannot list the real directory" };
+	const ok =
+		!err && (/LARGEST/.test(result ?? "") || /big\.ts/.test(result ?? ""));
+	return {
+		pass: ok,
+		secs,
+		detail: err ?? "raw chat cannot list the real directory",
+	};
 }
 
 async function runT4(mode: Mode): Promise<TaskOutcome> {
 	const subject = "deploy-target";
 	const fact = "The user's preferred deploy target is Fly.io.";
-	const question = "What is the user's preferred deploy target? Answer in one short sentence.";
+	const question =
+		"What is the user's preferred deploy target? Answer in one short sentence.";
 	if (mode === "harness") {
 		new MemoryStore().saveFact(subject, fact);
-		const { result, secs, err } = await timed(() => newEngine(true).run(question));
+		const { result, secs, err } = await timed(() =>
+			newEngine(true).run(question),
+		);
 		const ok = !err && /fly\.?io/i.test(result ?? "");
 		return { pass: ok, secs, detail: err ?? (result ?? "").slice(0, 120) };
 	}
 	// Control: two independent stateless chat calls — nothing persists a fact
 	// between them, so this can only pass by the model guessing correctly.
-	const { secs: s1, err: e1 } = await timed(() => rawChat(`Remember this: ${fact}`));
+	const { secs: s1, err: e1 } = await timed(() =>
+		rawChat(`Remember this: ${fact}`),
+	);
 	const { result, secs: s2, err: e2 } = await timed(() => rawChat(question));
 	const ok = !e1 && !e2 && /fly\.?io/i.test(result ?? "");
-	return { pass: ok, secs: Math.round((s1 + s2) * 10) / 10, detail: e2 ?? "raw chat is stateless — no memory tier to recall from" };
+	return {
+		pass: ok,
+		secs: Math.round((s1 + s2) * 10) / 10,
+		detail: e2 ?? "raw chat is stateless — no memory tier to recall from",
+	};
 }
 
 async function runT5(mode: Mode, fixture: string): Promise<TaskOutcome> {
@@ -238,31 +362,60 @@ async function runT5(mode: Mode, fixture: string): Promise<TaskOutcome> {
 		if (err) return { pass: false, secs, detail: err };
 		const completed = loadSession();
 		if (!completed || completed.done !== true) {
-			return { pass: false, secs, detail: "session not marked done after a clean run" };
+			return {
+				pass: false,
+				secs,
+				detail: "session not marked done after a clean run",
+			};
 		}
 		// Simulate a crash mid-task: a real kill leaves the last mid-loop save on
 		// disk with done:false. Write that state directly and confirm it's readable.
-		await saveSession([{ role: "user", content: goal }, { role: "assistant", content: "(interrupted)" }], {
-			goal: "an unfinished multi-step goal",
-			done: false,
-		});
+		await saveSession(
+			[
+				{ role: "user", content: goal },
+				{ role: "assistant", content: "(interrupted)" },
+			],
+			{
+				goal: "an unfinished multi-step goal",
+				done: false,
+			},
+		);
 		const crashed = loadSession();
-		const ok = !!crashed && crashed.done === false && crashed.goal === "an unfinished multi-step goal" && Array.isArray(crashed.messages) && crashed.messages.length === 2;
-		return { pass: ok, secs, detail: ok ? "crash state persisted and reloadable" : "crash state not recoverable from disk" };
+		const ok =
+			!!crashed &&
+			crashed.done === false &&
+			crashed.goal === "an unfinished multi-step goal" &&
+			Array.isArray(crashed.messages) &&
+			crashed.messages.length === 2;
+		return {
+			pass: ok,
+			secs,
+			detail: ok
+				? "crash state persisted and reloadable"
+				: "crash state not recoverable from disk",
+		};
 	}
 	// Control: raw chat has no session file at all — there is nothing to resume.
 	const sessionPath = join(homeDir, "session.json");
 	const existedBefore = existsSync(sessionPath);
 	const { secs, err } = await timed(() => rawChat("Say hello."));
 	const ok = !err && !existedBefore && existsSync(sessionPath);
-	return { pass: ok, secs, detail: "raw chat writes no session state — a killed process loses the entire turn" };
+	return {
+		pass: ok,
+		secs,
+		detail:
+			"raw chat writes no session state — a killed process loses the entire turn",
+	};
 }
 
 console.log(`Model:    ${model}`);
-console.log(`Baseline: raw Ollama chat (no tools, no memory, no session persistence)`);
+console.log(
+	`Baseline: raw Ollama chat (no tools, no memory, no session persistence)`,
+);
 console.log(`Scaffold: ${profile.tier} tier · ${profile.loop} loop\n`);
 
-const rows: Array<{ task: Task; harness: TaskOutcome; control: TaskOutcome }> = [];
+const rows: Array<{ task: Task; harness: TaskOutcome; control: TaskOutcome }> =
+	[];
 
 for (const task of TASKS) {
 	const fixture = await mkdtemp(join(tmpdir(), `bench-harness-fx-${task.id}-`));
@@ -306,18 +459,31 @@ lines.push(`# Harness benchmark — ${model}`);
 lines.push("");
 lines.push(`Run: ${new Date().toISOString()}`);
 lines.push(`Ollama: ${baseUrl}`);
-lines.push(`Scaffold: ${profile.tier} tier · ${profile.loop} loop · ${profile.toolCalling} dispatch`);
+lines.push(
+	`Scaffold: ${profile.tier} tier · ${profile.loop} loop · ${profile.toolCalling} dispatch`,
+);
 lines.push("");
 lines.push("| Task | Category | Harness | Control | Verdict |");
 lines.push("|---|---|---|---|---|");
 for (const r of rows) {
 	const h = `${r.harness.pass ? "✓" : "✗"} ${r.harness.secs}s`;
 	const c = `${r.control.pass ? "✓" : "✗"} ${r.control.secs}s`;
-	const verdict = r.harness.pass && !r.control.pass ? "harness wins" : r.harness.pass && r.control.pass ? "both pass" : !r.harness.pass && !r.control.pass ? "both fail" : "control wins (investigate)";
-	lines.push(`| ${r.task.id} | ${r.task.category} | ${h} | ${c} | ${verdict} |`);
+	const verdict =
+		r.harness.pass && !r.control.pass
+			? "harness wins"
+			: r.harness.pass && r.control.pass
+				? "both pass"
+				: !r.harness.pass && !r.control.pass
+					? "both fail"
+					: "control wins (investigate)";
+	lines.push(
+		`| ${r.task.id} | ${r.task.category} | ${h} | ${c} | ${verdict} |`,
+	);
 }
 lines.push("");
-lines.push(`**Harness: ${harnessPassed}/${TASKS.length} · Control: ${controlPassed}/${TASKS.length}**`);
+lines.push(
+	`**Harness: ${harnessPassed}/${TASKS.length} · Control: ${controlPassed}/${TASKS.length}**`,
+);
 lines.push("");
 lines.push("Detail:");
 for (const r of rows) {
@@ -327,10 +493,15 @@ for (const r of rows) {
 
 const reportDir = join(process.cwd(), ".bench-reports");
 mkdirSync(reportDir, { recursive: true });
-const reportPath = join(reportDir, `bench-harness-${model!.replace(/[:/]/g, "_")}-${Date.now()}.md`);
+const reportPath = join(
+	reportDir,
+	`bench-harness-${model!.replace(/[:/]/g, "_")}-${Date.now()}.md`,
+);
 writeFileSync(reportPath, lines.join("\n") + "\n");
 
-console.log(`\n${harnessPassed}/${TASKS.length} harness · ${controlPassed}/${TASKS.length} control`);
+console.log(
+	`\n${harnessPassed}/${TASKS.length} harness · ${controlPassed}/${TASKS.length} control`,
+);
 console.log(`Report: ${reportPath}\n`);
 
 rmSync(homeDir, { recursive: true, force: true });

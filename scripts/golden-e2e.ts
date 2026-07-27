@@ -63,9 +63,21 @@ const rows: Row[] = [];
 
 for (const { id, prompt } of ARCHETYPES) {
 	const root = await mkdtemp(join(tmpdir(), `golden-${id}-`));
-	const row: Row = { id, built: false, files: false, compiles: false, detail: "" };
+	const row: Row = {
+		id,
+		built: false,
+		files: false,
+		compiles: false,
+		detail: "",
+	};
 	try {
-		const build = await buildHarness(prompt, root, undefined, undefined);
+		// This is a fast structural smoke test: every archetype must build, ship
+		// its files and compile. Probing a runtime model per archetype adds
+		// latency without changing any of those three assertions.
+		const build = await buildHarness(prompt, root, undefined, {
+			characterize: false,
+			acceptance: false,
+		});
 		row.built = build.success;
 		if (!build.success) {
 			row.detail = build.errors.join("; ").slice(0, 120);
@@ -78,13 +90,21 @@ for (const { id, prompt } of ARCHETYPES) {
 		if (missing.length) row.detail = `missing: ${missing.join(", ")}`;
 
 		// Real compile: install deps, then the generated harness's OWN tsc.
-		const install = Bun.spawnSync(["bun", "install"], { cwd: out, stdout: "pipe", stderr: "pipe" });
+		const install = Bun.spawnSync(["bun", "install"], {
+			cwd: out,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
 		if (install.exitCode !== 0) {
 			row.detail = `bun install failed: ${install.stderr.toString().slice(0, 120)}`;
 			rows.push(row);
 			continue;
 		}
-		const tsc = Bun.spawnSync(["bunx", "tsc", "--noEmit"], { cwd: out, stdout: "pipe", stderr: "pipe" });
+		const tsc = Bun.spawnSync(["bunx", "tsc", "--noEmit"], {
+			cwd: out,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
 		row.compiles = tsc.exitCode === 0;
 		if (!row.compiles) {
 			const err = (tsc.stdout.toString() + tsc.stderr.toString()).trim();
@@ -98,7 +118,9 @@ for (const { id, prompt } of ARCHETYPES) {
 	rows.push(row);
 }
 
-console.log("\nGolden E2E — every archetype must build, ship all files, and compile:\n");
+console.log(
+	"\nGolden E2E — every archetype must build, ship all files, and compile:\n",
+);
 console.log("  archetype        build  files  compile  detail");
 console.log("  " + "-".repeat(70));
 let allPass = true;
@@ -110,5 +132,7 @@ for (const r of rows) {
 		`  ${r.id.padEnd(15)}${m(r.built)}${m(r.files)}${m(r.compiles).padEnd(8)} ${ok ? "" : r.detail}`,
 	);
 }
-console.log(`\n${allPass ? "PASS" : "FAIL"} — ${rows.filter((r) => r.built && r.files && r.compiles).length}/${rows.length} archetypes production-ready\n`);
+console.log(
+	`\n${allPass ? "PASS" : "FAIL"} — ${rows.filter((r) => r.built && r.files && r.compiles).length}/${rows.length} archetypes production-ready\n`,
+);
 process.exit(allPass ? 0 : 1);

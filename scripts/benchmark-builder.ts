@@ -82,7 +82,12 @@ async function bench(config: ProviderConfig): Promise<BenchRow> {
 			prompt,
 			dir,
 			(p) => console.log(`  [${config.type}] ${p.stage}: ${p.message}`),
-			{ provider: createProvider(config), maxRepairs: 2 },
+			{
+				provider: createProvider(config),
+				maxRepairs: 2,
+				characterize: false,
+				acceptance: false,
+			},
 		);
 		return {
 			provider: config.type,

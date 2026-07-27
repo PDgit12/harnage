@@ -63,7 +63,10 @@ const policy = {
 
 const buildRoot = await mkdtemp(join(tmpdir(), "editfmt-build-"));
 console.log("\nBuilding a generated harness (offline chassis)…");
-const build = await buildHarness("a file editing agent", buildRoot);
+const build = await buildHarness("a file editing agent", buildRoot, undefined, {
+	characterize: false,
+	acceptance: false,
+});
 if (!build.success) {
 	console.error("build failed:", build.errors);
 	process.exit(1);

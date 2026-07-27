@@ -204,6 +204,9 @@ if (buildModel) {
 		// The battery below IS the runtime measurement — no need to run a second
 		// one inside the build.
 		acceptance: false,
+		// Same reasoning: this script measures the BUILD, and probing the runtime
+		// model per prompt adds latency without changing what is being asserted.
+		characterize: false,
 	};
 	console.log(`Building a generated harness with build-model ${buildModel}…`);
 } else {
@@ -214,7 +217,9 @@ const build = await buildHarness(
 	"a codebase and data analysis agent that inspects files, reads data, and answers questions",
 	buildRoot,
 	undefined,
-	buildProvider,
+	// Unconditional: buildProvider is undefined on the offline path, and this
+	// script measures the RUNTIME battery below — not the build.
+	{ ...(buildProvider ?? {}), characterize: false, acceptance: false },
 );
 if (!build.success) {
 	console.error("build failed:", build.errors);
