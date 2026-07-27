@@ -555,19 +555,56 @@ program.command("trace").description("Summarize the local audit trail: runs, lat
 program.parse();
 `;
 
+/** snake_case tool id → the PascalCase base its module dir/file is named after. */
+export function toolModuleName(toolId: string): string {
+	return (
+		toolId.charAt(0).toUpperCase() +
+		toolId.slice(1).replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+	);
+}
+
+/** A registry entry is only emittable if the name is a legal object key AND a
+ *  legal path segment — an empty or digit-leading id (e.g. "8n_import") makes
+ *  `8nImport: () => import(...)` a syntax error in the generated file. */
+function isEmittableModuleName(name: string): boolean {
+	return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
+}
+
+/**
+ * `presentModules` is the set of PascalCase module names whose file actually
+ * landed in src/tools/. generateToolFiles silently skips any plan.tools entry it
+ * has no template for, and the GENERATE stage can drop a bespoke tool on an LLM
+ * failure — either way the id survives in plan.tools, and emitting an import for
+ * it produced a "Cannot find module" that failed the whole build. Pass the set
+ * from assemble (read off disk after every writer has run) so the registry can
+ * only ever reference modules that exist. Omitted → emit all valid names, which
+ * is what the offline chassis and the template tests want.
+ */
 export const TOOLS_REGISTRY = (
 	plan: HarnessPlan,
-) => `import type { Tool } from "./Tool.ts";
+	presentModules?: ReadonlySet<string>,
+) => {
+	const entries: string[] = [];
+	const skipped: string[] = [];
+	for (const t of plan.tools) {
+		const name = toolModuleName(t);
+		if (!isEmittableModuleName(name) || presentModules?.has(name) === false) {
+			skipped.push(t);
+			continue;
+		}
+		entries.push(
+			`  ${name}: () => import("./tools/${name}Tool/${name}Tool.ts"),`,
+		);
+	}
+	if (skipped.length) {
+		console.warn(
+			`Tool registry: skipping ${skipped.join(", ")} — no module file was generated for them.`,
+		);
+	}
+	return `import type { Tool } from "./Tool.ts";
 
 const toolModules = {
-${plan.tools
-	.map((t) => {
-		const name =
-			t.charAt(0).toUpperCase() +
-			t.slice(1).replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-		return `  ${name}: () => import("./tools/${name}Tool/${name}Tool.ts"),`;
-	})
-	.join("\n")}
+${entries.join("\n")}
 } as const;
 
 export type ToolName = keyof typeof toolModules;
@@ -596,6 +633,7 @@ export async function getAllTools(): Promise<Tool[]> {
   return tools;
 }
 `;
+};
 
 export const TOOL_TYPESCRIPT = `import { z } from "zod";
 

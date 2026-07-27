@@ -947,6 +947,56 @@ export function toToolDefs(tools: Tool[]): Array<Record<string, unknown>> {
   }));
 }
 
+/** Small models emit the function NAME with its arguments glued on — observed on
+ *  qwen2.5:3b: \`Grep{"pattern":"x","path":"./p"}\`. Split the trailing JSON back
+ *  off so the call is still usable instead of being dropped as unknown. */
+export function splitToolCallName(raw: string, input: Record<string, unknown>): { name: string; input: Record<string, unknown> } {
+  const brace = raw.indexOf("{");
+  if (brace <= 0) return { name: raw.trim(), input };
+  const name = raw.slice(0, brace).trim();
+  if (Object.keys(input).length > 0) return { name, input };
+  try {
+    const parsed = JSON.parse(raw.slice(brace));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { name, input: parsed as Record<string, unknown> };
+    }
+  } catch { /* keep the original args */ }
+  return { name, input };
+}
+
+/** Provider-side rejections of OUR tool payload (as opposed to a network or
+ *  auth failure). These are recoverable: retry the turn without tool defs. */
+export function isToolFormatError(message: string): boolean {
+  return /not in request\\.tools|failed to call function|tool_use_failed|invalid.{0,20}tool|unknown function/i.test(message);
+}
+
+/** PascalCase (or \`GrepTool\`) → the snake_case id tools are actually named with. */
+function toSnakeToolName(name: string): string {
+  return name
+    .replace(/Tool$/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\\s]+/g, "_")
+    .toLowerCase();
+}
+
+/** Resolve a model-emitted tool name against the real tool list. Exact match
+ *  first, then the malformations small models actually produce: a \`Tool\` suffix,
+ *  PascalCase instead of snake_case, wrong casing. Returns undefined only when
+ *  the name genuinely matches nothing — the caller must not echo such a call
+ *  back to the provider (Ollama rejects the next turn with "not in request.tools"). */
+export function resolveToolByName(tools: Tool[], rawName: string): Tool | undefined {
+  const name = rawName.trim();
+  if (!name) return undefined;
+  const exact = tools.find(t => t.name === name);
+  if (exact) return exact;
+  const snake = toSnakeToolName(name);
+  return (
+    tools.find(t => t.name === snake) ??
+    tools.find(t => t.name.toLowerCase() === name.toLowerCase()) ??
+    tools.find(t => t.name.toLowerCase() === snake)
+  );
+}
+
 // Always-keep tools; glob/grep/file_write compete by goal relevance so a tight
 // small-model budget still leaves room for the tool the task actually needs.
 const CORE_TOOLS = ["file_read", "bash"];
@@ -1543,6 +1593,8 @@ export class LoopEngine {
   /** Frontier/strong: free-form native tool loop (Claude Code semantics). */
   private async runFree(goal: string): Promise<string> {
     let iteration = 0;
+    let toolFormatRetried = false;
+    let providerError: string | undefined;
 
     while (true) {
       iteration++;
@@ -1570,19 +1622,63 @@ export class LoopEngine {
           fullText += event.content ?? "";
           this.onEvent?.({ type: "text", content: event.content ?? "" });
         }
-        if (event.type === "tool_use") calls.push({ name: event.name ?? "", input: (event.input ?? {}) as Record<string, unknown>, id: event.id ?? "" });
-        if (event.type === "error") return \`Error: \${event.content}\`;
+        if (event.type === "tool_use") {
+          const split = splitToolCallName(event.name ?? "", (event.input ?? {}) as Record<string, unknown>);
+          calls.push({ name: split.name, input: split.input, id: event.id ?? "" });
+        }
+        if (event.type === "error") {
+          // A tool-format rejection ("not in request.tools", "failed to call
+          // function") means THIS provider can't take our tool defs for this
+          // turn — usually because a previous turn echoed a malformed name.
+          // Retry the turn once with no tool defs so the run continues instead
+          // of dying on the first malformed call.
+          if (!toolFormatRetried && isToolFormatError(event.content ?? "")) {
+            toolFormatRetried = true;
+            providerError = event.content ?? "";
+          } else {
+            return \`Error: \${event.content}\`;
+          }
+        }
       }
 
+      if (providerError) {
+        providerError = undefined;
+        // Drop the poisoned echo, tell the model plainly, and let the loop retry.
+        this.messages = this.messages.filter(m => !m.tool_calls);
+        this.messages.push({
+          role: "user",
+          content: "Your last tool call was malformed and was rejected. Call exactly one tool by its exact name (" + this.tools.map(t => t.name).join(", ") + ") with a JSON arguments object, or give the final answer.",
+        });
+        this.onEvent?.({ type: "status", content: "recovering from a malformed tool call" });
+        continue;
+      }
+
+      // Resolve BEFORE echoing: a name that matches no tool must never reach
+      // assistantMsg.tool_calls, or the provider rejects the whole next request
+      // ("not in request.tools") and the run dies on a single bad name.
+      const resolved = calls.map(c => ({ call: c, tool: resolveToolByName(this.tools, c.name) }));
+      const unresolved = resolved.filter(r => !r.tool).map(r => r.call.name);
+      const usable = resolved.filter((r): r is { call: ToolUse; tool: Tool } => Boolean(r.tool));
+
       const assistantMsg: Record<string, unknown> = { role: "assistant", content: fullText };
-      if (calls.length) {
+      if (usable.length) {
         // Echoed tool_calls: Ollama /api/chat wants arguments as an OBJECT;
         // OpenAI-compatible hosts want a JSON STRING. Sending the wrong one makes
         // Ollama 400 ("looks like object, can't find closing '}'") on the next turn.
+        // Echo the RESOLVED name, not the raw one the model emitted.
         const asObject = this.config.type === "ollama";
-        assistantMsg.tool_calls = calls.map(c => ({ id: c.id, type: "function", function: { name: c.name, arguments: asObject ? c.input : JSON.stringify(c.input) } }));
+        assistantMsg.tool_calls = usable.map(r => ({ id: r.call.id, type: "function", function: { name: r.tool.name, arguments: asObject ? r.call.input : JSON.stringify(r.call.input) } }));
       }
       this.messages.push(assistantMsg);
+
+      if (usable.length === 0 && unresolved.length) {
+        this.safety.recordFailure();
+        this.messages.push({
+          role: "user",
+          content: "No tool named " + unresolved.join(" or ") + " exists. Available tools: " + this.tools.map(t => t.name).join(", ") + ". Call one of those by its exact name, or give the final answer.",
+        });
+        continue;
+      }
 
       if (calls.length === 0) {
         // Small models often NARRATE tool use ("I'll now list the files...")
@@ -1607,23 +1703,27 @@ export class LoopEngine {
       }
       this.nudged = false;
 
-      for (const call of calls) {
-        this.onEvent?.({ type: "tool_use", toolName: call.name, toolInput: call.input });
-        const tool = this.tools.find(t => t.name === call.name);
+      // Only usable calls get a tool result: a \`role:"tool"\` message whose
+      // tool_call_id was never echoed above is an orphan the provider rejects.
+      for (const { call, tool } of usable) {
+        this.onEvent?.({ type: "tool_use", toolName: tool.name, toolInput: call.input });
         let output = "";
-        if (!tool) {
-          output = \`Tool '\${call.name}' not found\`;
+        const permission = await this.resolveToolPermission(tool.name, call.input);
+        if (!permission.ok) {
+          output = \`Permission denied: \${permission.reason}\`;
+          this.safety.recordFailure();
         } else {
-          const permission = await this.resolveToolPermission(call.name, call.input);
-          if (!permission.ok) {
-            output = \`Permission denied: \${permission.reason}\`;
-            this.safety.recordFailure();
-          } else {
-            output = await this.callToolChecked(tool, call.input);
-          }
+          output = await this.callToolChecked(tool, call.input);
         }
         this.messages.push({ role: "tool", content: compactToolOutput(output), tool_call_id: call.id });
-        this.onEvent?.({ type: "tool_done", toolName: call.name });
+        this.onEvent?.({ type: "tool_done", toolName: tool.name });
+      }
+      if (unresolved.length) {
+        this.safety.recordFailure();
+        this.messages.push({
+          role: "user",
+          content: "No tool named " + unresolved.join(" or ") + " exists — that call was ignored. Available tools: " + this.tools.map(t => t.name).join(", ") + ".",
+        });
       }
 
       if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
@@ -1858,8 +1958,12 @@ export class LoopEngine {
         return answer;
       }
 
-      const name = decision.tool ?? "";
-      const args = decision.args ?? {};
+      // Same malformation the native path sees: small models glue the args JSON
+      // onto the tool name. Split it back off before anything downstream (the
+      // repeat-call signature included) treats it as the tool's identity.
+      const split = splitToolCallName(decision.tool ?? "", decision.args ?? {});
+      const name = split.name;
+      const args = split.input;
 
       // Identical-call breaker: same tool + same args as the previous turn
       // means the model is stuck. First repeat gets a corrective observation
@@ -1883,13 +1987,13 @@ export class LoopEngine {
       this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
       this.onEvent?.({ type: "tool_use", toolName: name, toolInput: args });
 
-      const tool = this.tools.find(t => t.name === name);
+      const tool = resolveToolByName(this.tools, name);
       let output = "";
       if (!tool) {
         output = \`Tool '\${name}' not found. Available: \${selected.map(t => t.name).join(", ")}\`;
         this.safety.recordFailure();
       } else {
-        const permission = await this.resolveToolPermission(name, args);
+        const permission = await this.resolveToolPermission(tool.name, args);
         if (!permission.ok) {
           output = \`Permission denied: \${permission.reason}\`;
           this.safety.recordFailure();

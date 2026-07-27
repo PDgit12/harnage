@@ -32,32 +32,89 @@ export function pascalCase(id: string): string {
 // reject them and feed the reason back to the model for self-correction.
 const NODE_BUILTINS = new Set(builtinModules);
 
+// Generated harnesses run on Bun, so Bun's own built-ins are as available as
+// node:'s — the chassis itself imports bun:sqlite for the memory tier. They are
+// NOT in builtinModules, so without this they read as undeclared packages.
+const BUN_BUILTINS = new Set(["bun", "sqlite", "ffi", "jsc", "test", "wrap"]);
+
 function isRealNodeBuiltin(spec: string): boolean {
+	if (spec.startsWith("bun:"))
+		return BUN_BUILTINS.has(spec.slice(4).split("/")[0]);
 	if (!spec.startsWith("node:")) return false;
 	// node:fs/promises → fs; the subpath doesn't change builtin-ness.
 	return NODE_BUILTINS.has(spec.slice(5).split("/")[0]);
 }
 
-export function disallowedImports(code: string): string[] {
+/** "@scope/pkg/sub/path" → "@scope/pkg"; "react/jsx-runtime" → "react". */
+export function packageRoot(spec: string): string {
+	const parts = spec.split("/");
+	return spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+}
+
+/**
+ * Bare imports the code may not use. `extraAllowed` carries package names that
+ * ARE declared in the target package.json — the GENERATE stage passes none (a
+ * bespoke tool only ever gets zod), while the repair loop passes the generated
+ * harness's real dependency list so it never rejects a legitimate patch to a
+ * file that imports commander/ink/react.
+ */
+export function disallowedImports(
+	code: string,
+	extraAllowed?: Iterable<string>,
+): string[] {
+	const allowed = new Set(["zod", ...(extraAllowed ?? [])]);
 	const bad = new Set<string>();
-	const re = /(?:from|import|require\s*\()\s*["']([^"']+)["']/g;
-	let m: RegExpExecArray | null = re.exec(code);
-	while (m !== null) {
-		const spec = m[1];
-		if (
-			!spec.startsWith("./") &&
-			!spec.startsWith("../") &&
-			!isRealNodeBuiltin(spec) &&
-			spec !== "zod"
-		) {
-			bad.add(spec);
+	// Statement-anchored. A bare /from\s*"/ also fires inside ordinary strings —
+	// `content.startsWith("Observation from ")` was read as an import of
+	// everything up to the next quote — so the static forms must start a line.
+	const patterns = [
+		/^[ \t]*(?:import|export)\b[^;\n]*?\bfrom\s*["']([^"']+)["']/gm,
+		/^[ \t]*import\s*["']([^"']+)["']/gm,
+		/\b(?:require|import)\s*\(\s*["']([^"']+)["']\s*\)/g,
+	];
+	for (const re of patterns) {
+		let m: RegExpExecArray | null = re.exec(code);
+		while (m !== null) {
+			const spec = m[1];
+			if (
+				!spec.startsWith("./") &&
+				!spec.startsWith("../") &&
+				!isRealNodeBuiltin(spec) &&
+				!allowed.has(packageRoot(spec))
+			) {
+				bad.add(spec);
+			}
+			m = re.exec(code);
 		}
-		m = re.exec(code);
 	}
 	return [...bad];
 }
 
-function importRefineMessage(code: string): string {
+/**
+ * Modules whose only export of interest is `fetch` — a GLOBAL in Bun and Node
+ * 18+, so the correct fix is to delete the import line, not to install anything.
+ * The build brain reaches for these when it wants HTTP and then dodges between
+ * spellings under re-prompting (observed: `node-fetch` → the invented
+ * `node:fetch`), burning every repair attempt on an error no model will fix.
+ * Deleting the line deterministically costs zero attempts and is always right.
+ */
+const FETCH_SHIM_SPECIFIERS = new Set([
+	"node:fetch",
+	"node-fetch",
+	"isomorphic-fetch",
+	"cross-fetch",
+	"whatwg-fetch",
+]);
+
+/** Drop whole `import … from "<fetch shim>"` statements. Leaves all else alone. */
+export function stripFetchShimImports(code: string): string {
+	return code.replace(
+		/^[ \t]*import\s+(?:[^;'"\n]*?\s+from\s*)?["']([^"']+)["'][ \t]*;?[ \t]*\r?\n?/gm,
+		(line, spec: string) => (FETCH_SHIM_SPECIFIERS.has(spec) ? "" : line),
+	);
+}
+
+export function importRefineMessage(code: string): string {
 	return `These imports are not available: ${disallowedImports(code).join(", ")}. This harness ships a fixed package.json — only "zod", relative imports, and real node: built-ins (node:fs, node:path, node:child_process, node:os, node:crypto, …) work. For HTTP use the global fetch() with NO import at all — "node:fetch" is NOT a module (fetch is a global), and node-fetch/axios/got are not installed.`;
 }
 
