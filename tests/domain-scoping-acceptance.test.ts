@@ -5,6 +5,7 @@ import {
 	optimizationCandidates,
 	renderAcceptanceMd,
 	retriesFor,
+	shouldRetrySmaller,
 } from "../src/builder/acceptance-run";
 import {
 	ENGINE_TEMPLATE,
@@ -564,5 +565,39 @@ describe("battery budget scales with measured model speed", () => {
 			);
 			expect(worst, `${ms}ms/turn worst case`).toBeLessThanOrEqual(20);
 		}
+	});
+});
+
+// This retry path only executes against a slow real build brain, so it is
+// exactly the kind of code that ships unverified. Six tasks beats none when a
+// local brain runs out of clock; retrying a schema or auth failure just costs
+// another wait for the same outcome.
+describe("battery generation retry decision", () => {
+	it("retries a timeout at a smaller size", () => {
+		expect(shouldRetrySmaller(new Error("The operation timed out."), 16)).toBe(
+			true,
+		);
+		expect(shouldRetrySmaller(new Error("timeout"), 20)).toBe(true);
+		expect(shouldRetrySmaller(new Error("The operation was aborted"), 16)).toBe(
+			true,
+		);
+	});
+
+	it("does not retry failures a smaller battery cannot fix", () => {
+		expect(shouldRetrySmaller(new Error("401 unauthorized"), 16)).toBe(false);
+		expect(
+			shouldRetrySmaller(new Error("Model failed to produce valid JSON"), 16),
+		).toBe(false);
+		expect(shouldRetrySmaller(new Error("429 rate limit"), 16)).toBe(false);
+	});
+
+	it("never retries when already at the floor", () => {
+		expect(shouldRetrySmaller(new Error("timed out"), 6)).toBe(false);
+		expect(shouldRetrySmaller(new Error("timed out"), 3)).toBe(false);
+	});
+
+	it("handles a non-Error throw", () => {
+		expect(shouldRetrySmaller("the operation timed out", 16)).toBe(true);
+		expect(shouldRetrySmaller(null, 16)).toBe(false);
 	});
 });

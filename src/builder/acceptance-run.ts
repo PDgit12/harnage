@@ -298,6 +298,24 @@ export function estimateBatteryMinutes(
 /** Retries a model's speed can afford. A slow endpoint that needs retuning is
  *  exactly where an unbounded loop turns a build into a coffee break, so the
  *  slower the model, the fewer attempts it gets. */
+/**
+ * Whether a failed battery generation is worth retrying at a smaller size.
+ *
+ * Only for TIMEOUTS: a slow build brain that ran out of clock will often
+ * succeed at six tasks, whereas a schema or auth failure will fail again
+ * identically and just cost another wait. Extracted so the decision is
+ * testable — the retry path itself only runs against a slow real brain, which
+ * is exactly the kind of code that ships unverified.
+ */
+export function shouldRetrySmaller(
+	error: unknown,
+	currentCount: number,
+): boolean {
+	if (currentCount <= 6) return false;
+	const msg = error instanceof Error ? error.message : String(error);
+	return /timed? ?out|abort/i.test(msg);
+}
+
 export function retriesFor(medianTurnMs: number): number {
 	if (medianTurnMs > 8000) return 1;
 	if (medianTurnMs > 4000) return 2;
