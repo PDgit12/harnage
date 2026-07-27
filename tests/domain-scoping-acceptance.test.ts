@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	batterySizeFor,
+	estimateBatteryMinutes,
 	optimizationCandidates,
 	renderAcceptanceMd,
+	retriesFor,
 } from "../src/builder/acceptance-run";
 import {
 	ENGINE_TEMPLATE,
@@ -527,5 +530,39 @@ describe("acceptance optimize loop", () => {
 			]),
 		);
 		expect(c.length).toBeLessThanOrEqual(2);
+	});
+});
+
+// Thoroughness has to be bounded by TIME, not task count. A fixed 16 tasks is
+// two minutes on a 3B and over ten on a 14B — and with retuning the 14B build
+// passed forty minutes, far past "a few more minutes to know it is right".
+describe("battery budget scales with measured model speed", () => {
+	it("gives a fast model a big battery and a slow one a small one", () => {
+		expect(batterySizeFor(1200)).toBe(20); // hosted, ~1.2s/turn
+		expect(batterySizeFor(2500)).toBe(20); // qwen2.5:3b
+		expect(batterySizeFor(5500)).toBeLessThan(20); // llama3 8B
+		expect(batterySizeFor(13300)).toBeLessThan(10); // qwen2.5:14b
+	});
+
+	it("never drops below a battery that can characterise anything", () => {
+		expect(batterySizeFor(60_000)).toBe(6);
+		expect(batterySizeFor(Number.MAX_SAFE_INTEGER)).toBe(6);
+	});
+
+	it("gives slow models fewer retries", () => {
+		expect(retriesFor(2500)).toBe(3);
+		expect(retriesFor(5500)).toBe(2);
+		expect(retriesFor(13300)).toBe(1);
+	});
+
+	it("keeps the worst case inside a sane build budget for every speed", () => {
+		for (const ms of [1200, 2500, 5500, 13300, 30_000]) {
+			const worst = estimateBatteryMinutes(
+				batterySizeFor(ms),
+				ms,
+				1 + retriesFor(ms),
+			);
+			expect(worst, `${ms}ms/turn worst case`).toBeLessThanOrEqual(20);
+		}
 	});
 });

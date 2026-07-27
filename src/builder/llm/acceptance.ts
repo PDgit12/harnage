@@ -144,7 +144,7 @@ export async function runGenerateAcceptance(
 	 *  smoke test: this battery is the evidence the user is handed with their
 	 *  harness, and six tasks cannot characterise a domain. Build time is a
 	 *  one-off cost for something they will run for months. */
-	count = 12,
+	count = 16,
 ): Promise<AcceptanceTask[]> {
 	const bespoke = [
 		...(plan.customCommands ?? []).map((c) => `/${c.name}: ${c.description}`),
