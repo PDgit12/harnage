@@ -561,7 +561,7 @@ async function runBuildAcceptance(
 	const { runAcceptance, renderAcceptanceMd } = await import(
 		"./acceptance-run"
 	);
-	const { writeFile } = await import("node:fs/promises");
+	const { readFile, writeFile } = await import("node:fs/promises");
 	const { join } = await import("node:path");
 
 	onProgress?.({ stage: "verifying", message: "Planning acceptance tasks..." });
@@ -666,14 +666,30 @@ async function runBuildAcceptance(
 				const { HARNESS_PROFILES } = await import(
 					"./assemble/harness-templates"
 				);
-				await writeFile(
-					join(outputDir, "src", "profiles.ts"),
-					HARNESS_PROFILES(merged, plan.name),
-				);
-				onProgress?.({
-					stage: "verifying",
-					message: `Baked the winning scaffold into the harness (${report.passed}/${report.total} → ${best.passed}/${best.total} after ${tried} retry(s))`,
-				});
+				const profilesPath = join(outputDir, "src", "profiles.ts");
+				const previous = await readFile(profilesPath, "utf-8");
+				await writeFile(profilesPath, HARNESS_PROFILES(merged, plan.name));
+
+				// This write happens AFTER verifyBuild, so nothing else would catch a
+				// malformed rewrite — the user would receive a harness that no longer
+				// compiles, tuned into uselessness. Re-verify, and roll back to the
+				// version that was known good rather than ship a broken one.
+				const { verifyBuild } = await import("./assemble");
+				const recheck = await verifyBuild(outputDir, { skipInstall: true });
+				if (!recheck.success) {
+					await writeFile(profilesPath, previous);
+					onProgress?.({
+						stage: "verifying",
+						message:
+							"Tuned scaffold did not compile — reverted to the verified default",
+						detail: recheck.errors.join(" | ").slice(0, 200),
+					});
+				} else {
+					onProgress?.({
+						stage: "verifying",
+						message: `Baked the winning scaffold into the harness (${report.passed}/${report.total} → ${best.passed}/${best.total} after ${tried} retry(s))`,
+					});
+				}
 			} catch (err) {
 				onProgress?.({
 					stage: "verifying",
