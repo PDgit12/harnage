@@ -39,9 +39,26 @@ export interface ModelProfile {
   contextTokens: number;
 }
 
+// Sizes for models whose tag carries none — "llama3:latest", a bare "mistral".
+// :latest is how most people pull a model, and without this every one of them
+// misses its band and lands on the generic unknown-size default.
+const DEFAULT_PARAMS: Array<[RegExp, number]> = [
+  [/^llama3\\.2(:latest)?$/, 3], [/^llama3\\.1(:latest)?$/, 8], [/^llama3(:latest)?$/, 8],
+  [/^llama2(:latest)?$/, 7], [/^codellama(:latest)?$/, 7],
+  [/^qwen2\\.5-coder(:latest)?$/, 7], [/^qwen2\\.5(:latest)?$/, 7], [/^qwen3(:latest)?$/, 8],
+  [/^mistral(:latest)?$/, 7], [/^mistral-nemo(:latest)?$/, 12], [/^mixtral(:latest)?$/, 47],
+  [/^gemma2(:latest)?$/, 9], [/^gemma(:latest)?$/, 7],
+  [/^phi3(:latest)?$/, 3.8], [/^phi4(:latest)?$/, 14],
+  [/^deepseek-r1(:latest)?$/, 7], [/^deepseek-coder(:latest)?$/, 6.7],
+  [/^granite3\\.?\\d*(:latest)?$/, 8], [/^command-r(:latest)?$/, 35],
+];
+
 function paramSize(model: string): number {
-  const m = model.match(/(\\d+(?:\\.\\d+)?)\\s*b/i);
-  return m ? Number.parseFloat(m[1]) : 0;
+  const m = model.match(/(\\d+(?:\\.\\d+)?)\\s*b\\b/i);
+  if (m) return Number.parseFloat(m[1]);
+  const lower = model.toLowerCase();
+  for (const [re, params] of DEFAULT_PARAMS) if (re.test(lower)) return params;
+  return 0;
 }
 
 /** Resolve a model name to its size-tier scaffold. Ordered; first match wins. */

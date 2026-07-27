@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { paramsOf } from "../src/builder/models/catalog";
 import { characterizeModel } from "../src/builder/models/characterize";
 import type { Provider } from "../src/services/api/client";
 
@@ -92,5 +93,38 @@ describe("characterizeModel", () => {
 		const c = await characterizeModel(stalled, { timeoutMs: 50 });
 		expect(c.completed).toBe(0);
 		expect(c.override).toEqual({});
+	});
+});
+
+// Size resolution is what puts a model in a band, and the band decides its
+// whole scaffold. `:latest` is how most people pull a model, so a tag with no
+// parameter count is the COMMON case, not an edge one — llama3:latest was
+// landing on the generic unknown-size default despite being a known 8B.
+describe("paramsOf — size resolution for untagged models", () => {
+	it("reads an explicit size from the tag", () => {
+		expect(paramsOf("qwen2.5:14b")).toBe(14);
+		expect(paramsOf("qwen2.5-coder:1.5b")).toBe(1.5);
+		expect(paramsOf("llama3.2:1b")).toBe(1);
+	});
+
+	it("resolves known families that carry no size", () => {
+		expect(paramsOf("llama3:latest")).toBe(8);
+		expect(paramsOf("llama3")).toBe(8);
+		expect(paramsOf("llama3.2")).toBe(3);
+		expect(paramsOf("mistral")).toBe(7);
+		expect(paramsOf("gemma2:latest")).toBe(9);
+		expect(paramsOf("phi3")).toBe(3.8);
+	});
+
+	it("prefers an explicit tag over the defaults table", () => {
+		// llama3 defaults to 8B, but llama3:70b is not an 8B model.
+		expect(paramsOf("llama3:70b")).toBe(70);
+	});
+
+	it("returns 0 for a genuinely unknown model rather than guessing", () => {
+		// A wrong guess silently ships the wrong scaffold; 0 means "fall back to
+		// the safe mid defaults", which is the honest answer.
+		expect(paramsOf("some-random-model:latest")).toBe(0);
+		expect(paramsOf("")).toBe(0);
 	});
 });

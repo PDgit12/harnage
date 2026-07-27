@@ -248,9 +248,49 @@ export interface FamilyInfo {
 }
 
 /** Layer 2: infer capability signals from a model id we don't have curated. */
+/**
+ * Parameter counts for models whose tag carries no size — `llama3:latest`,
+ * `mistral`, a bare `gemma2`. `:latest` is how most people actually pull a
+ * model, and without this every one of them lands on the generic
+ * unknown-size default instead of its real band. Values are the size Ollama
+ * ships for the untagged/`:latest` variant.
+ */
+export const DEFAULT_PARAMS: Array<[RegExp, number]> = [
+	[/^llama3\.2(:latest)?$/, 3],
+	[/^llama3\.1(:latest)?$/, 8],
+	[/^llama3(:latest)?$/, 8],
+	[/^llama2(:latest)?$/, 7],
+	[/^codellama(:latest)?$/, 7],
+	[/^qwen2\.5-coder(:latest)?$/, 7],
+	[/^qwen2\.5(:latest)?$/, 7],
+	[/^qwen3(:latest)?$/, 8],
+	[/^mistral(:latest)?$/, 7],
+	[/^mistral-nemo(:latest)?$/, 12],
+	[/^mixtral(:latest)?$/, 47],
+	[/^gemma2(:latest)?$/, 9],
+	[/^gemma(:latest)?$/, 7],
+	[/^phi3(:latest)?$/, 3.8],
+	[/^phi4(:latest)?$/, 14],
+	[/^deepseek-r1(:latest)?$/, 7],
+	[/^deepseek-coder(:latest)?$/, 6.7],
+	[/^granite3\.?\d*(:latest)?$/, 8],
+	[/^command-r(:latest)?$/, 35],
+];
+
+/** Parameter count in billions, from the tag or the known-defaults table. */
+export function paramsOf(id: string): number {
+	const lower = id.toLowerCase();
+	const tagged = Number.parseFloat(
+		lower.match(/(\d+(?:\.\d+)?)b\b/)?.[1] ?? "0",
+	);
+	if (tagged > 0) return tagged;
+	for (const [re, params] of DEFAULT_PARAMS) if (re.test(lower)) return params;
+	return 0;
+}
+
 export function inferFamily(id: string): FamilyInfo {
 	const lower = id.toLowerCase();
-	const params = Number.parseFloat(lower.match(/(\d+(?:\.\d+)?)b/)?.[1] ?? "0");
+	const params = paramsOf(id);
 	const family =
 		[
 			"qwen",
