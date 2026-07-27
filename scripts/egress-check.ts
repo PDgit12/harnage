@@ -45,7 +45,7 @@ const build = await buildHarness(
 	"a codebase analysis agent that inspects and edits a project",
 	root,
 	undefined,
-	undefined,
+	{ characterize: false, acceptance: false },
 );
 if (!build.success) {
 	console.error("build failed:", build.errors);
@@ -67,8 +67,12 @@ await rm(root, { recursive: true, force: true });
 
 console.log("\nEgress check — hardcoded outbound hosts in generated code:\n");
 if (findings.length === 0) {
-	console.log("  none unexpected. Only opt-in provider endpoints (or localhost) appear.");
-	console.log("\nPASS — no surprise phone-home. A local (Ollama) deploy contacts nothing external.\n");
+	console.log(
+		"  none unexpected. Only opt-in provider endpoints (or localhost) appear.",
+	);
+	console.log(
+		"\nPASS — no surprise phone-home. A local (Ollama) deploy contacts nothing external.\n",
+	);
 	process.exit(0);
 }
 for (const f of findings) console.log(`  ✗ ${f.host}  (${f.file})`);

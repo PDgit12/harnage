@@ -1,4 +1,5 @@
 import type { HarnessPlan } from "../index";
+import { classifyDomain, domainToolPriority } from "../models/catalog";
 
 /**
  * Templates for the generated harness's subsystem modules — the features
@@ -38,9 +39,26 @@ export interface ModelProfile {
   contextTokens: number;
 }
 
+// Sizes for models whose tag carries none — "llama3:latest", a bare "mistral".
+// :latest is how most people pull a model, and without this every one of them
+// misses its band and lands on the generic unknown-size default.
+const DEFAULT_PARAMS: Array<[RegExp, number]> = [
+  [/^llama3\\.2(:latest)?$/, 3], [/^llama3\\.1(:latest)?$/, 8], [/^llama3(:latest)?$/, 8],
+  [/^llama2(:latest)?$/, 7], [/^codellama(:latest)?$/, 7],
+  [/^qwen2\\.5-coder(:latest)?$/, 7], [/^qwen2\\.5(:latest)?$/, 7], [/^qwen3(:latest)?$/, 8],
+  [/^mistral(:latest)?$/, 7], [/^mistral-nemo(:latest)?$/, 12], [/^mixtral(:latest)?$/, 47],
+  [/^gemma2(:latest)?$/, 9], [/^gemma(:latest)?$/, 7],
+  [/^phi3(:latest)?$/, 3.8], [/^phi4(:latest)?$/, 14],
+  [/^deepseek-r1(:latest)?$/, 7], [/^deepseek-coder(:latest)?$/, 6.7],
+  [/^granite3\\.?\\d*(:latest)?$/, 8], [/^command-r(:latest)?$/, 35],
+];
+
 function paramSize(model: string): number {
-  const m = model.match(/(\\d+(?:\\.\\d+)?)\\s*b/i);
-  return m ? Number.parseFloat(m[1]) : 0;
+  const m = model.match(/(\\d+(?:\\.\\d+)?)\\s*b\\b/i);
+  if (m) return Number.parseFloat(m[1]);
+  const lower = model.toLowerCase();
+  for (const [re, params] of DEFAULT_PARAMS) if (re.test(lower)) return params;
+  return 0;
 }
 
 /** Resolve a model name to its size-tier scaffold. Ordered; first match wins. */
@@ -61,14 +79,43 @@ function resolveBase(model: string, contextTokens = 8192): ModelProfile {
       editFormat: "search-replace", systemPromptBudget: 8000, temperature: 0.2, nudge: true, contextTokens };
   }
 
-  // Small models (<=3.5B or known small families): fixed pipeline, minimal
+  // Bands are finer than tier LABELS on purpose. The labels feed the eval/
+  // acceptance pass bars, so they stay at four; the scaffolding underneath is
+  // graded, because "mid" used to span 4B-12B — a 3.5x capability range given
+  // one setting. A 4B is far closer to a 3B than to a 12B.
+
+  // <=3.5B, or a family known to behave like one: fixed pipeline, minimal
   // tools, grammar-forced JSON so narration is physically impossible.
   if ((size > 0 && size <= 3.5) || /phi|tinyllama|gemma:2b|llama3\\.2/.test(m)) {
     return { tier: "small", loop: "pipeline", toolCalling: "constrained-json", maxTools: 4,
       editFormat: "whole-file", systemPromptBudget: 1600, temperature: 0, repeatPenalty: 1.15, nudge: false, contextTokens };
   }
 
-  // Mid models (7-8B) and unknown: plan-act + constrained JSON (safe default).
+  // 3.5-6B: still small-tier discipline (pipeline, grammar-forced JSON) with a
+  // little more room. Measured evidence at 3B says the constrained grammar
+  // beats native tool-calling 14/20 vs 7/20 — do not hand these models the
+  // native channel just because they are slightly bigger.
+  if (size > 0 && size <= 6) {
+    return { tier: "small", loop: "pipeline", toolCalling: "constrained-json", maxTools: 5,
+      editFormat: "whole-file", systemPromptBudget: 2000, temperature: 0.05, repeatPenalty: 1.1, nudge: false, contextTokens };
+  }
+
+  // 6-9B: the classic mid band — plan-act, still constrained JSON.
+  if (size > 0 && size <= 9) {
+    return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 5,
+      editFormat: "whole-file", systemPromptBudget: 2400, temperature: 0.1, repeatPenalty: 1.1, nudge: false, contextTokens };
+  }
+
+  // 9-13B: approaching strong. More tools and prompt budget, and search-replace
+  // edits (whole-file rewrites waste context at this size), but the dispatch
+  // stays constrained until there is measured evidence native is better here.
+  if (size > 0 && size < 13) {
+    return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 6,
+      editFormat: "search-replace", systemPromptBudget: 4000, temperature: 0.15, repeatPenalty: 1.05, nudge: false, contextTokens };
+  }
+
+  // Unknown size (no parseable parameter count): the mid defaults are the safe
+  // assumption — never assume a model is strong when we cannot tell.
   return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 5,
     editFormat: "whole-file", systemPromptBudget: 2400, temperature: 0.1, repeatPenalty: 1.1, nudge: false, contextTokens };
 }
@@ -475,10 +522,17 @@ function ruleMatches(rule: PermissionRule, toolName: string, target: string): bo
   if (!m) return false;
   if (m[1] !== toolName && m[1] !== "*") return false;
   const isBash = toolName === "bash";
-  // Bash chaining/redirection defeats the intent of a single-command grant.
-  if (isBash && target && /[;&|<>\\u0060\\n]|\\$\\(/.test(target)) return false;
   const glob = m[2];
-  if (glob === undefined || glob === "" || glob === "*" || glob === "**") return true;
+  const isWildcardGrant = glob === undefined || glob === "" || glob === "*" || glob === "**";
+  // Chaining/redirection defeats the intent of a SCOPED grant: bash(git *)
+  // must not authorise "git status; rm -rf /". Against an explicit
+  // allow-everything grant it buys nothing — bash(*) already permits
+  // sh -c 'rm -rf /', which contains no metacharacter at all — while breaking
+  // honest work: "echo HELLO > f.txt" was refused under bash(*) and reported as
+  // "needs an allow rule ... bash(*)", i.e. add the rule you already have.
+  // That silently failed every write-via-shell task.
+  if (isBash && !isWildcardGrant && target && /[;&|<>\\u0060\\n]|\\$\\(/.test(target)) return false;
+  if (isWildcardGrant) return true;
   const escaped = glob.replace(/[.+^\${}()|[\\]\\\\]/g, "\\\\$&");
   // Bash args routinely contain "/", so "*" stays greedy there (the chaining
   // guard above is what keeps a bash wildcard safe). Path globs get segment
@@ -1012,11 +1066,18 @@ export function resolveToolByName(tools: Tool[], rawName: string): Tool | undefi
 
 // Always-keep tools; glob/grep/file_write compete by goal relevance so a tight
 // small-model budget still leaves room for the tool the task actually needs.
-const CORE_TOOLS = ["file_read", "bash"];
+// Ranked for THIS harness's domain at build time. Every harness ships the full
+// tool kit — withholding capability by domain is guesswork that leaves an agent
+// unable to do its job. What a domain changes is which tools the model sees
+// FIRST when the budget is tight, since a small model can only be shown a few.
+const DOMAIN_TOOL_PRIORITY: string[] = ${JSON.stringify(domainToolPriority(classifyDomain(`${plan.description ?? ""} ${(plan.systemPrompt ?? "").slice(0, 400)}`)))};
+const CORE_TOOLS = DOMAIN_TOOL_PRIORITY.slice(0, 2);
 
 /** Cap the exposed tool set to the profile budget (ACI principle): keep the
  * core tools plus the ones most relevant to the goal. Small models' tool-call
- * accuracy collapses past ~5-8 tools — fewer, better tools recover the gap. */
+ * accuracy collapses past ~5-8 tools — fewer, better tools recover the gap.
+ * Ties break on the domain ranking, so a docs harness reaches for grep where a
+ * code harness reaches for bash. */
 export function selectTools(tools: Tool[], goal: string, maxTools: number): Tool[] {
   if (tools.length <= maxTools) return tools;
   const lower = goal.toLowerCase();
@@ -1030,7 +1091,14 @@ export function selectTools(tools: Tool[], goal: string, maxTools: number): Tool
       const descHit = words.some(w => desc.includes(w)) ? 1 : 0;
       return { t, score: nameHit + descHit };
     })
-    .sort((a, b) => b.score - a.score);
+    // Goal relevance still wins; the domain ranking only breaks ties, which is
+    // most of the time — a bare "summarize this" hits no tool name or keyword.
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const ai = DOMAIN_TOOL_PRIORITY.indexOf(a.t.name);
+      const bi = DOMAIN_TOOL_PRIORITY.indexOf(b.t.name);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
   const picked = [...core];
   for (const { t } of scored) {
     if (picked.length >= maxTools) break;
@@ -1054,16 +1122,79 @@ export function compactToolOutput(output: string, maxChars = 2000): string {
 // Grammar-forced decision schema for constrained-json dispatch. Under Ollama
 // \`format\`, a small model physically cannot narrate — it must emit exactly one
 // of: {action:"tool", tool, args} | {action:"final", answer}.
-const DECISION_SCHEMA = {
-  type: "object",
-  properties: {
-    action: { type: "string", enum: ["tool", "final"] },
-    tool: { type: "string" },
-    args: { type: "object" },
-    answer: { type: "string" },
-  },
-  required: ["action"],
-};
+// \`tool\` is an ENUM of the tools actually exposed this turn, not a free string.
+// A free string let the model invent a name — observed on qwen2.5:3b as
+// \`GrepTool{"pattern":"x"}\` — which then had to be repaired downstream. An enum
+// makes an unknown tool name structurally impossible to emit, so the whole
+// malformation class disappears at decode time instead of being tolerated.
+//
+// forceTool drops "final" from the action enum: the model CANNOT stop, it can
+// only act. Used as the last resort when the goal demands an artifact the model
+// has not produced (see the outcome check in the decision loop).
+function decisionSchema(toolNames: string[], forceTool = false): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: forceTool ? ["tool"] : ["tool", "final"] },
+      tool: toolNames.length ? { type: "string", enum: toolNames } : { type: "string" },
+      args: { type: "object" },
+      answer: { type: "string" },
+    },
+    required: forceTool ? ["action", "tool"] : ["action"],
+  };
+}
+
+/**
+ * The same decision, but with \`args\` TYPED PER TOOL via a discriminated union.
+ *
+ * decisionSchema constrains which tool may be named; it cannot stop the model
+ * filling the wrong argument names ({tool:"file_write", args:{filename:"x"}}
+ * satisfies \`args:{type:"object"}\` and then fails at call time). A oneOf keyed
+ * on the tool name pushes that into the grammar: the decoder can only produce
+ * argument keys the tool actually declares. This is the difference between
+ * telling a small model the rules and making the rules unbreakable.
+ *
+ * Falls back to the flat schema when no tool exposes a usable JSON schema —
+ * a union with an empty branch would constrain the model to nothing.
+ */
+function typedDecisionSchema(
+  tools: Tool[],
+  forceTool = false,
+): Record<string, unknown> {
+  const branches: Array<Record<string, unknown>> = [];
+  for (const t of tools) {
+    const schema = t.inputSchema?.toJSONSchema?.() as
+      | { properties?: Record<string, unknown>; required?: string[] }
+      | undefined;
+    if (!schema?.properties || Object.keys(schema.properties).length === 0) continue;
+    branches.push({
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["tool"] },
+        tool: { type: "string", enum: [t.name] },
+        args: {
+          type: "object",
+          properties: schema.properties,
+          required: schema.required ?? [],
+          additionalProperties: false,
+        },
+      },
+      required: ["action", "tool", "args"],
+    });
+  }
+  if (!branches.length) return decisionSchema(tools.map(t => t.name), forceTool);
+  if (!forceTool) {
+    branches.push({
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["final"] },
+        answer: { type: "string" },
+      },
+      required: ["action", "answer"],
+    });
+  }
+  return { oneOf: branches };
+}
 
 // Grammar for memory consolidation. Passing this as the decode \`format\` makes
 // Ollama (and hosted response_format) emit valid JSON, so a 3B model extracts
@@ -1091,6 +1222,48 @@ const CONSOLIDATION_SCHEMA = {
   },
   required: ["facts", "events"],
 };
+
+/**
+ * The file a goal asks the agent to PRODUCE, if it names one.
+ *
+ * This exists because act-forcing is not enough. The act-before-answer nudge
+ * only fires when NO tool was used, and the observed small-model failure gets
+ * past it: given "create hello.txt containing HELLO", qwen2.5:3b called glob and
+ * file_read (so toolsUsed > 0) and then finalized with "to create a file you
+ * need to run a command…" — it used a tool, just never the one that finishes the
+ * job. Checking the artifact is the only signal that catches that, and it costs
+ * no model call.
+ *
+ * Deliberately conservative: only creation verbs, only an explicit filename with
+ * an extension. A goal that names no artifact returns null and nothing changes.
+ */
+function requestedArtifact(goal: string): string | null {
+  if (!/\\b(creat|writ|generat|sav|output|produc|export)\\w*\\b/i.test(goal)) return null;
+  const m = goal.match(/(?:named|called|file|to|into|as)\\s+[\`'"]?([\\w.\\-\\/]+\\.[a-z0-9]{1,6})[\`'"]?/i)
+    ?? goal.match(/[\`'"]([\\w.\\-\\/]+\\.[a-z0-9]{1,6})[\`'"]/);
+  const path = m?.[1];
+  if (!path || path.startsWith("/") || path.includes("..")) return null;
+  return path;
+}
+
+// How many times a refused outcome may be re-forced. Bounded on purpose: an
+// unbounded loop on a model that cannot comply burns the whole iteration budget
+// and ends in a safety stop instead of an answer. Three escalating attempts is
+// where the observed dodge either breaks or is genuinely beyond the model.
+const MAX_OUTCOME_FORCES = 3;
+
+/**
+ * The exact text a goal says a file must contain, when it says so literally
+ * ("containing exactly the text HELLO", 'containing "HELLO"'). Used only for the
+ * final escalation, where the model is handed the complete JSON to emit — at
+ * that point leaving the content as a placeholder would just invite another
+ * invention. Returns null when the goal does not pin the content down.
+ */
+function requiredContent(goal: string): string | null {
+  const m = goal.match(/contain(?:ing|s)?\\s+(?:exactly\\s+)?(?:the\\s+)?(?:text|string|content)?\\s*["'\u201c]([^"'\u201d]{1,200})["'\u201d]/i)
+    ?? goal.match(/contain(?:ing|s)?\\s+exactly\\s+(?:the\\s+)?(?:text|string)?\\s*([^\\s.,]{1,80})/i);
+  return m?.[1]?.trim() || null;
+}
 
 interface Decision { action: "tool" | "final"; tool?: string; args?: Record<string, unknown>; answer?: string; }
 
@@ -1152,15 +1325,21 @@ function looksNonProse(s: string): boolean {
   return false;
 }
 
+// One rule per line, each a single concrete action. A small model tracks a
+// short numbered list far better than the same content as a paragraph — the
+// prose version buried the path rule mid-sentence, where it was ignored.
+// Ordered by how often it is violated, because early lines survive truncation.
 const DECISION_RULES =
-  'You act by returning ONE JSON object and nothing else. ' +
-  'To use a tool: {"action":"tool","tool":"<name>","args":{...}}. ' +
-  'To give your final answer: {"action":"final","answer":"<text>"}. ' +
-  'Do NOT describe what you will do — return the tool action. One tool per turn. ' +
-  'NEVER answer from memory or guess a result — you MUST use a tool to inspect or ' +
-  'change real files before answering. ' +
-  'Example — to read a file, return exactly: ' +
-  '{"action":"tool","tool":"file_read","args":{"path":"src/index.ts"}}';
+  'RULES:\\n' +
+  '1. Return ONE JSON object. Nothing else.\\n' +
+  '2. Use a tool: {"action":"tool","tool":"<name>","args":{...}}\\n' +
+  '3. Answer: {"action":"final","answer":"<text>"}\\n' +
+  '4. Use the EXACT paths listed in the working directory message. Never invent a path.\\n' +
+  '5. Never say a file is missing unless it is absent from that list.\\n' +
+  '6. One tool per turn. Wait for the result.\\n' +
+  '7. Never guess a file\\'s contents. Read it first.\\n' +
+  '8. Do not describe what you will do. Do it.\\n' +
+  'EXAMPLE: {"action":"tool","tool":"file_read","args":{"path":"a.ts"}}';
 
 // isSmallTalk() already skips the domain pipeline's forced-procedure text, but
 // decisionSystem() was still sending DECISION_RULES's "you MUST use a tool"
@@ -1797,7 +1976,18 @@ export class LoopEngine {
       const params = schema?.properties ? Object.keys(schema.properties).join(", ") : "";
       return \`- \${t.name}(\${params}): \${t.description}\`;
     }).join("\\n");
-    const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty, signal: this.abortController.signal };
+    const toolNames = selected.map(t => t.name);
+    const baseDecode = { temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty, signal: this.abortController.signal };
+    // The artifact this goal demands, if it names one. Checked before a final
+    // answer is accepted — see the outcome block below.
+    const wanted = requestedArtifact(goal);
+    let outcomeForced = 0;
+    // Set for exactly one turn after an outcome refusal.
+    let forceActNow = false;
+    // Per-tool typed args (a oneOf grammar). Strictly stronger than the flat
+    // schema, but it leans on the host compiling a union — if a provider rejects
+    // it, drop to the flat schema for the rest of the run rather than failing.
+    let useTypedArgs = true;
     let toolsUsed = 0;
     let actNudged = false;
     let verifyChecked = false;
@@ -1820,10 +2010,36 @@ export class LoopEngine {
     if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
         !this.messages.some(m => typeof m.content === "string" && m.content.startsWith("Files in the working directory:"))) {
       try {
-        const entries = (await import("node:fs")).readdirSync(process.cwd());
-        for (const e of entries) this.knownFiles.add(e.toLowerCase());
-        const listing = entries.slice(0, 50).join(", ") + (entries.length > 50 ? ", …" : "");
-        this.messages.unshift({ role: "user", content: \`Files in the working directory: \${listing}. Read paths relative to this directory — do NOT assume a src/ subfolder.\` });
+        // RECURSIVE, not one level. A flat listing names the directory "src"
+        // and leaves the model to guess what is inside it — which it does,
+        // wrongly, then reports a real file as missing ("src/util/format.ts
+        // does not exist" for a file that does exist). Handing over the actual
+        // nested paths removes the guess entirely. Bounded so a big repo can't
+        // blow the small-model context.
+        const { readdirSync } = await import("node:fs");
+        const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
+        const paths: string[] = [];
+        const walk = (rel: string, depth: number): void => {
+          if (depth > 3 || paths.length >= 80) return;
+          let entries: Array<{ name: string; isDirectory(): boolean }>;
+          try { entries = readdirSync(rel ? \`\${process.cwd()}/\${rel}\` : process.cwd(), { withFileTypes: true }); }
+          catch { return; }
+          for (const e of entries) {
+            if (paths.length >= 80) return;
+            if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+            const p = rel ? \`\${rel}/\${e.name}\` : e.name;
+            if (e.isDirectory()) walk(p, depth + 1);
+            else paths.push(p);
+          }
+        };
+        walk("", 1);
+        for (const p of paths) {
+          this.knownFiles.add(p.toLowerCase());
+          const base = p.split("/").pop();
+          if (base) this.knownFiles.add(base.toLowerCase());
+        }
+        const listing = paths.join(", ") + (paths.length >= 80 ? ", …" : "");
+        this.messages.unshift({ role: "user", content: \`Files in the working directory: \${listing}. These are the ONLY files that exist. Use these exact paths, relative to the working directory. Do NOT invent a path or a folder that is not in this list.\` });
       } catch { /* fs unavailable — skip grounding */ }
     }
 
@@ -1842,9 +2058,31 @@ export class LoopEngine {
       // is narrated via tool_use / final events instead.
       this.onEvent?.({ type: "status", content: "deciding next step" });
       let raw = "";
+      // Grammar is recomputed each turn: right after an outcome refusal the
+      // schema has no "final" branch, so the model can only emit a tool call.
+      const decode = {
+        ...baseDecode,
+        format: useTypedArgs
+          ? typedDecisionSchema(selected, forceActNow)
+          : decisionSchema(toolNames, forceActNow),
+      };
+      forceActNow = false;
+      let schemaRejected = false;
       for await (const e of streamProvider(this.config, reqMessages, undefined, decode)) {
         if (e.type === "text") raw += e.content ?? "";
-        if (e.type === "error") return \`Error: \${e.content}\`;
+        if (e.type === "error") {
+          // Host couldn't compile the union grammar — fall back, don't die.
+          if (useTypedArgs && /format|schema|grammar|oneOf/i.test(e.content ?? "")) {
+            schemaRejected = true;
+            break;
+          }
+          return \`Error: \${e.content}\`;
+        }
+      }
+      if (schemaRejected) {
+        useTypedArgs = false;
+        this.onEvent?.({ type: "status", content: "provider rejected the typed grammar — using the flat schema" });
+        continue;
       }
 
       const decision = parseDecision(raw);
@@ -1862,6 +2100,46 @@ export class LoopEngine {
       this.nudged = false;
 
       if (decision.action === "final") {
+        // OUTCOME CHECK: the goal named a file to produce and that file is not
+        // there. No amount of prose makes that a completed task, so the answer
+        // is refused and the next turn is GRAMMAR-FORCED to act — "final" is
+        // removed from the schema, so the model cannot stop again. This is the
+        // one backstop that catches the observed failure where the model used
+        // some other tool first, which every toolsUsed===0 check misses.
+        if (wanted && outcomeForced < MAX_OUTCOME_FORCES && this.tools.length > 0) {
+          // Existence is not enough. Observed: after the write was refused, the
+          // model ran "touch hello.txt", which satisfied an exists-only check
+          // and let a FALSE success through — the file was empty. When the goal
+          // pins the content, the content is the outcome.
+          let produced = false;
+          try {
+            const { existsSync, readFileSync } = await import("node:fs");
+            const abs = (await import("node:path")).resolve(process.cwd(), wanted);
+            if (existsSync(abs)) {
+              const need = requiredContent(goal);
+              produced = !need || readFileSync(abs, "utf-8").includes(need);
+            }
+          } catch { produced = true; /* can't check — don't block on it */ }
+          if (!produced) {
+            outcomeForced++;
+            forceActNow = true;
+            this.safety.recordFailure();
+            this.onEvent?.({ type: "status", content: \`forcing creation of \${wanted} (\${outcomeForced}/\${MAX_OUTCOME_FORCES})\` });
+            // ESCALATING, because one polite refusal does not work: the model
+            // re-emits the same "run echo ... > file" prose. Each attempt
+            // removes another degree of freedom, ending with the literal JSON
+            // to echo back — at which point there is nothing left to invent.
+            const wantedContent = requiredContent(goal);
+            const nudge = outcomeForced === 1
+              ? \`The goal was to create "\${wanted}", and that file does not exist. Describing a shell command is not creating it. Call the file_write tool now.\`
+              : outcomeForced === 2
+                ? \`"\${wanted}" STILL does not exist. You are not talking to a human who will run your command — YOU must write the file. Use tool "file_write" with args {"path":"\${wanted}","content":"<the exact content the goal asked for>"}.\`
+                : \`Return EXACTLY this and nothing else: {"action":"tool","tool":"file_write","args":{"path":"\${wanted}","content":\${JSON.stringify(wantedContent ?? "<the content the goal specified>")}}}\`;
+            this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+            this.messages.push({ role: "user", content: nudge });
+            continue;
+          }
+        }
         // Repeated-final termination guard: if the model emits the SAME final
         // answer 3 times (across nudge-driven retries), accept it and stop —
         // the one-shot nudges are spent and re-prompting won't change it, so
@@ -1872,6 +2150,16 @@ export class LoopEngine {
           sameFinalCount++;
           if (sameFinalCount >= 2) {
             this.safety.recordFailure();
+            // Never release an answer we have PROVEN wrong. The outcome check
+            // above has already refused this one MAX_OUTCOME_FORCES times for a
+            // file that still does not exist — repeating it does not make it
+            // true, so report the failure instead of the model's claim.
+            if (outcomeForced >= MAX_OUTCOME_FORCES) {
+              const failure = \`Could not create "\${wanted}". The model described a shell command instead of writing the file, and repeated that after \${MAX_OUTCOME_FORCES} corrections. Nothing was written.\`;
+              this.messages.push({ role: "assistant", content: failure });
+              if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });
+              return failure;
+            }
             const settled = unwrapFinal(decision.answer ?? "");
             this.messages.push({ role: "assistant", content: settled });
             if (this.persistSession) await saveSession(this.messages, { goal: this.activeGoal, done: false });

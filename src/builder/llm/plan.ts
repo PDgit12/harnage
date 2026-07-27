@@ -1,6 +1,7 @@
 import type { Provider } from "../../services/api/client";
 import { buildAgentSystemPrompt } from "../../services/system-prompt";
 import type { HarnessPlan } from "../index";
+import { BASELINE_TOOLS, classifyDomain } from "../models/catalog";
 import type { ProjectContext } from "../spec/context";
 import { completeJSON } from "./client";
 import { KNOWN_TOOLS } from "./interview";
@@ -11,15 +12,6 @@ import {
 	PipelinePlanSchema,
 	SkillsPlanSchema,
 } from "./schemas";
-
-const ALWAYS_TOOLS = [
-	"bash",
-	"file_read",
-	"glob",
-	"grep",
-	"file_edit",
-	"file_write",
-];
 
 const CORE_EXAMPLE = `{
   "name": "code-review-agent",
@@ -72,8 +64,15 @@ Respond with ONLY a JSON object in that shape.`;
 	// Deterministic post-processing: enforce invariants the model can't be
 	// trusted with.
 	const known = new Set(KNOWN_TOOLS);
+	// Domain is read from what the user actually asked for, not from the build
+	// brain's self-description — the description is generated text and drifts.
+	// It does NOT gate the toolset (every harness gets the full kit); it decides
+	// how tools are ranked and presented, which is where specialisation belongs.
+	const domain = classifyDomain(
+		`${spec.purpose} ${spec.domainKnowledge ?? ""} ${core.description}`,
+	);
 	const tools = [
-		...new Set([...ALWAYS_TOOLS, ...core.tools.filter((t) => known.has(t))]),
+		...new Set([...BASELINE_TOOLS, ...core.tools.filter((t) => known.has(t))]),
 	];
 	const name =
 		core.name

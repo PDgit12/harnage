@@ -116,6 +116,39 @@ bun run build       # compile binary
 
 Generated harnesses must themselves pass `bun install && tsc --noEmit` — the builder verifies this and runs an LLM repair loop on failures.
 
+### Acceptance — every harness is tested before you get it
+
+You pick the model *before* the build, so harnage builds the harness for that model and
+then **runs it**. The build brain writes a short battery of real tasks in your harness's
+own domain, harnage executes the finished harness against them on your chosen model, and
+the result ships inside the harness as `ACCEPTANCE.md` + `acceptance.json`.
+
+```
+Acceptance: 6 tasks on qwen2.5:3b...
+  PASS workflow:generate
+  PASS workflow:read
+  FAIL workflow:write-file — model described the file instead of writing it
+  ...
+Acceptance: 4/6 — bar 4/6 for small tier → MET
+```
+
+A low score does **not** fail the build — you still get the harness, plus the failing tasks
+and a stronger model to try, because a poor score is usually the model rather than the
+harness. Skip it with `--no-acceptance`.
+
+The build brain never writes grader code. Tasks are structured data (a goal, fixture files,
+and a typed expectation), evaluated by harnage — and any task that would pass on an empty
+answer is rejected before it can score anything.
+
+### Tools: every harness gets all of them
+
+Capability is not rationed by domain — withholding tools looks like specialisation but is
+guesswork, and an agent missing one tool is simply broken. What the domain changes is how
+tools are **ranked and presented**: a small model can only be shown a handful per turn, so a
+docs harness surfaces `grep` first where a code harness surfaces `bash`. Specialisation
+lives in the system prompt, the pipeline stages, bespoke tools and commands, and that
+ranking — not in taking capability away.
+
 ### Evals
 
 Two axes, both offline-capable. Results append to `~/.harnage/eval-results.jsonl`.

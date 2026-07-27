@@ -701,6 +701,13 @@ export const TSCONFIG_TEMPLATE = {
 		module: "ESNext",
 		moduleResolution: "bundler",
 		strict: true,
+		// `catch (e) { e.message }` is what every model writes, and under strict
+		// TS the binding is `unknown`, so it is a compile error. It was the single
+		// most common failure in real generated commands — three of six errors in
+		// one observed build — and the repair loop burned its attempts on it.
+		// Turning it off keeps the rest of strict mode while removing a whole
+		// class of failure that is stylistic, not a real defect.
+		useUnknownInCatchVariables: false,
 		skipLibCheck: true,
 		noEmit: true,
 		allowImportingTsExtensions: true,

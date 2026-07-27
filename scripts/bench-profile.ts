@@ -119,7 +119,7 @@ const build = await buildHarness(
 	"a codebase analysis and file agent that inspects and edits a project",
 	buildRoot,
 	undefined,
-	buildProvider,
+	{ ...buildProvider, characterize: false, acceptance: false },
 );
 if (!build.success) {
 	console.error("build failed:", build.errors);
@@ -189,7 +189,12 @@ for (const task of TASKS) {
 // reliable; small/mid still miss the odd multi-step task, so their bar is 4/5.
 // Exit nonzero below bar so this can gate a release (run on a machine with the
 // model — cloud CI has no Ollama).
-const BAR: Record<string, number> = { frontier: 5, strong: 5, mid: 4, small: 4 };
+const BAR: Record<string, number> = {
+	frontier: 5,
+	strong: 5,
+	mid: 4,
+	small: 4,
+};
 const tier = String(profile.tier);
 const bar = BAR[tier] ?? TASKS.length;
 const gatePass = passed >= bar;

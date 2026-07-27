@@ -19,7 +19,9 @@ import { buildHarness } from "../src/builder";
 const model = process.argv[2];
 const baseUrl = process.argv[3] ?? "http://localhost:11434";
 if (!model) {
-	console.error("usage: bun scripts/bench-archetype.ts <model> [ollamaBaseUrl]");
+	console.error(
+		"usage: bun scripts/bench-archetype.ts <model> [ollamaBaseUrl]",
+	);
 	process.exit(1);
 }
 
@@ -58,7 +60,10 @@ function writeFixture(dir: string): void {
 		join(dir, "config.ts"),
 		"export function parseConfig(raw: string) {\n  return JSON.parse(raw);\n}\n",
 	);
-	writeFileSync(join(dir, "index.ts"), "import { parseConfig } from './config';\n");
+	writeFileSync(
+		join(dir, "index.ts"),
+		"import { parseConfig } from './config';\n",
+	);
 	writeFileSync(
 		join(dir, "users.csv"),
 		"id,name,role\n1,Ada,admin\n2,Linus,dev\n3,Grace,dev\n",
@@ -87,20 +92,28 @@ const build = await buildHarness(
 	"a codebase, data, and documentation agent that inspects a project",
 	buildRoot,
 	undefined,
-	undefined,
+	{ characterize: false, acceptance: false },
 );
 if (!build.success) {
 	console.error("build failed:", build.errors);
 	process.exit(1);
 }
 
-const { getAllTools } = (await import(join(build.outputDir, "src/tools.ts"))) as {
+const { getAllTools } = (await import(
+	join(build.outputDir, "src/tools.ts")
+)) as {
 	getAllTools: () => Promise<unknown[]>;
 };
-const { LoopEngine } = (await import(join(build.outputDir, "src/engine.ts"))) as {
-	LoopEngine: new (cfg: Record<string, unknown>) => { run(goal: string): Promise<string> };
+const { LoopEngine } = (await import(
+	join(build.outputDir, "src/engine.ts")
+)) as {
+	LoopEngine: new (
+		cfg: Record<string, unknown>,
+	) => { run(goal: string): Promise<string> };
 };
-const { resolveProfile } = (await import(join(build.outputDir, "src/profiles.ts"))) as {
+const { resolveProfile } = (await import(
+	join(build.outputDir, "src/profiles.ts")
+)) as {
 	resolveProfile: (m: string, ctx?: number) => Record<string, unknown>;
 };
 
@@ -109,7 +122,9 @@ const tools = await getAllTools();
 process.chdir(fixture);
 
 console.log(`\nModel:   ${model}`);
-console.log(`Scaffold: ${profile.tier} tier · ${profile.loop} loop · ${profile.toolCalling} dispatch\n`);
+console.log(
+	`Scaffold: ${profile.tier} tier · ${profile.loop} loop · ${profile.toolCalling} dispatch\n`,
+);
 
 let passed = 0;
 for (const task of TASKS) {
@@ -119,7 +134,13 @@ for (const task of TASKS) {
 	try {
 		const engine = new LoopEngine({
 			tools,
-			providerConfig: { type: "ollama", model, baseUrl, maxTokens: 4096, contextTokens: 8192 },
+			providerConfig: {
+				type: "ollama",
+				model,
+				baseUrl,
+				maxTokens: 4096,
+				contextTokens: 8192,
+			},
 			profile,
 			policy,
 			persistSession: false,
@@ -131,8 +152,11 @@ for (const task of TASKS) {
 	const secs = Math.round((performance.now() - started) / 100) / 10;
 	const ok = !err && task.check(out);
 	if (ok) passed++;
-	console.log(`${ok ? "✓" : "✗"} ${task.id.padEnd(24)} ${String(secs).padStart(6)}s`);
-	if (!ok) console.log(`    ${(err ?? out).replace(/\s+/g, " ").slice(0, 150)}`);
+	console.log(
+		`${ok ? "✓" : "✗"} ${task.id.padEnd(24)} ${String(secs).padStart(6)}s`,
+	);
+	if (!ok)
+		console.log(`    ${(err ?? out).replace(/\s+/g, " ").slice(0, 150)}`);
 }
 
 console.log(`\n${passed}/${TASKS.length} archetype tasks passed  (${model})\n`);

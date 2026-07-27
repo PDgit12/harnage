@@ -50,6 +50,9 @@ export interface BuildResult {
 	/** When usedLLM is false because the build brain errored, the reason
 	 *  (e.g. a 429 rate limit) — so the fallback isn't silent. */
 	fallbackReason?: string;
+	/** Result of executing the finished harness against its own domain battery
+	 *  on the model it was built for. Absent when acceptance was not run. */
+	acceptance?: import("../acceptance-run").AcceptanceReport;
 }
 
 export const BASE_FILES: Array<{

@@ -1,3 +1,4 @@
+import { BASELINE_TOOLS } from "../models/catalog";
 import type { ProjectContext } from "./context";
 
 export interface StructuredSpec {
@@ -9,14 +10,8 @@ export interface StructuredSpec {
 	models: Array<"ollama" | "anthropic" | "openai">;
 }
 
-const ALWAYS_TOOLS = [
-	"bash",
-	"file_read",
-	"glob",
-	"grep",
-	"file_edit",
-	"file_write",
-];
+// Baseline toolset is shared with the LLM path (models/catalog.ts) so both
+// produce the same capability set; TOOL_TRIGGERS below only ADD to it.
 
 const LANGUAGE_MAP: [string[], string][] = [
 	[["python", "flask", "django", "pip", "pytest"], "python"],
@@ -39,7 +34,7 @@ const COMMAND_TRIGGERS: [string[], string[]][] = [
 
 // The offline keyword path has no LLM to infer tool needs from prose, so a
 // prompt like "research assistant that can search the web" was silently
-// generating a harness with only ALWAYS_TOOLS — no web capability at all.
+// generating a harness with only the baseline tools — no web capability at all.
 // Mirrors LANGUAGE_MAP/COMMAND_TRIGGERS: match() does whole-word matching, so
 // these are additive (a prompt can trigger both).
 const TOOL_TRIGGERS: [string[], string[]][] = [
@@ -181,7 +176,7 @@ export function parseIntent(
 	projectContext?: ProjectContext,
 ): StructuredSpec {
 	const lower = prompt.toLowerCase();
-	const tools = new Set(ALWAYS_TOOLS);
+	const tools = new Set(BASELINE_TOOLS);
 	const commands = new Set<string>(["/help", "/clear", "/exit", "/model"]);
 
 	for (const [triggers, extras] of COMMAND_TRIGGERS) {

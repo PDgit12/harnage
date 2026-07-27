@@ -277,6 +277,13 @@ if (buildModel) {
 			contextTokens: 8192,
 		}),
 		maxRepairs: 2,
+		// This script asserts the build COMPILES across 10 prompts; executing an
+		// acceptance battery per prompt would multiply its runtime for a signal
+		// scripts/eval.ts already covers.
+		acceptance: false,
+		// Same reasoning: this script measures the BUILD, and probing the runtime
+		// model per prompt adds latency without changing what is being asserted.
+		characterize: false,
 	};
 	console.log(`Build brain: ${buildModel}`);
 } else {
@@ -295,7 +302,14 @@ for (const p of selected) {
 	let outputDir = "";
 
 	try {
-		const build = await buildHarness(p.prompt, root, undefined, buildProvider);
+		// buildProvider is undefined on the offline path, so the batch opt-outs
+		// must be supplied unconditionally — otherwise an offline run still pays
+		// to probe a runtime model it is not measuring.
+		const build = await buildHarness(p.prompt, root, undefined, {
+			...(buildProvider ?? {}),
+			characterize: false,
+			acceptance: false,
+		});
 		outputDir = build.outputDir;
 		assertions.push({
 			name: "build.success",
