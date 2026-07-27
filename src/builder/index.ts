@@ -1,6 +1,9 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Provider } from "../services/api/client";
 import { buildAgentSystemPrompt } from "../services/system-prompt";
+import type { AcceptanceReport } from "./acceptance-run";
 import type { BuildResult } from "./assemble";
 import { assembleAndVerify } from "./assemble";
 import type { AskFn } from "./llm/interview";
@@ -79,6 +82,10 @@ export interface BuildOptions {
 	ask?: AskFn;
 	/** Max verify-repair iterations after a failed build. Default 2. */
 	maxRepairs?: number;
+	/** Run the domain acceptance battery on the chosen model after a successful
+	 *  build. Default true — a harness nobody executed is a harness nobody knows
+	 *  works. Set false for batch/CI callers that only care that it compiles. */
+	acceptance?: boolean;
 }
 
 /**
@@ -451,10 +458,216 @@ export async function buildHarness(
 		result = { ...repaired.result, repairs: repaired.repairsUsed };
 	}
 
+	// ACCEPTANCE: execute the finished harness on the model it was built for.
+	// Only meaningful on a successful LLM build — the offline chassis has no
+	// build brain to author a domain battery with.
+	let acceptance: AcceptanceReport | undefined;
+	if (result.success && options?.acceptance !== false && options?.provider) {
+		acceptance = await runBuildAcceptance(
+			options.provider,
+			plan,
+			outputDir,
+			prompt,
+			onProgress,
+		);
+	}
+
 	onProgress?.({
 		stage: result.success ? "done" : "error",
 		message: result.success ? "Build complete!" : "Build encountered errors",
 	});
 
-	return { ...result, usedLLM, fallbackReason };
+	return { ...result, usedLLM, fallbackReason, acceptance };
+}
+
+/**
+ * Plan a domain battery, run it against the built harness, write the proof into
+ * the harness, and advise a stronger model when the score is poor.
+ *
+ * Every failure path here is non-fatal: the user keeps their build and is told
+ * plainly that it wasn't tested, rather than losing the build to a flaky model
+ * or an unreachable Ollama.
+ */
+async function runBuildAcceptance(
+	provider: Provider,
+	plan: HarnessPlan,
+	outputDir: string,
+	prompt: string,
+	onProgress?: (p: BuildProgress) => void,
+): Promise<AcceptanceReport | undefined> {
+	const { runGenerateAcceptance } = await import("./llm/acceptance");
+	const { runAcceptance, renderAcceptanceMd } = await import(
+		"./acceptance-run"
+	);
+	const { writeFile } = await import("node:fs/promises");
+	const { join } = await import("node:path");
+
+	onProgress?.({ stage: "verifying", message: "Planning acceptance tasks..." });
+	let tasks: Awaited<ReturnType<typeof runGenerateAcceptance>> = [];
+	try {
+		tasks = await runGenerateAcceptance(provider, plan, prompt);
+	} catch (err) {
+		onProgress?.({
+			stage: "verifying",
+			message: "Acceptance skipped — could not plan tasks",
+			detail: err instanceof Error ? err.message : String(err),
+		});
+	}
+
+	const runtime = await resolveAcceptanceProvider(plan);
+	if (!runtime) {
+		const report: AcceptanceReport = {
+			model: plan.defaultLocalModel ?? "unknown",
+			tier: "unknown",
+			loop: "unknown",
+			passed: 0,
+			total: 0,
+			bar: 0,
+			met: false,
+			tasks: [],
+			skipped:
+				"no runtime model reachable (start Ollama, or set a provider with /config)",
+		};
+		await writeFile(
+			join(outputDir, "ACCEPTANCE.md"),
+			renderAcceptanceMd(plan.name, report),
+		).catch(() => {});
+		onProgress?.({
+			stage: "verifying",
+			message: `Acceptance skipped — ${report.skipped}`,
+		});
+		return report;
+	}
+
+	onProgress?.({
+		stage: "verifying",
+		message: `Acceptance: ${tasks.length} tasks on ${runtime.model}...`,
+	});
+	const report = await runAcceptance(outputDir, tasks, runtime, (line) =>
+		onProgress?.({ stage: "verifying", message: line }),
+	);
+
+	await writeFile(
+		join(outputDir, "ACCEPTANCE.md"),
+		renderAcceptanceMd(plan.name, report),
+	).catch(() => {});
+	await writeFile(
+		join(outputDir, "acceptance.json"),
+		JSON.stringify({ ...report, ts: new Date().toISOString() }, null, 2),
+	).catch(() => {});
+	persistAcceptance(plan, report);
+
+	if (!report.skipped) {
+		onProgress?.({
+			stage: "verifying",
+			message: `Acceptance: ${report.passed}/${report.total} — bar ${report.bar}/${report.total} for ${report.tier} tier → ${report.met ? "MET" : "BELOW BAR"}${report.errored ? ` (${report.errored} skipped: provider error)` : ""}`,
+			detail: report.met ? undefined : strongerModelAdvice(plan, report),
+		});
+	}
+	return report;
+}
+
+/** The model the harness will actually run on: its baked local model if Ollama
+ *  has it, else the saved build brain. Undefined when nothing is reachable. */
+async function resolveAcceptanceProvider(plan: HarnessPlan): Promise<
+	| {
+			type: string;
+			model: string;
+			baseUrl?: string;
+			apiKey?: string;
+			maxTokens?: number;
+			contextTokens?: number;
+	  }
+	| undefined
+> {
+	const baseUrl = "http://localhost:11434";
+	if (plan.defaultLocalModel) {
+		try {
+			const res = await fetch(`${baseUrl}/api/tags`, {
+				signal: AbortSignal.timeout(2000),
+			});
+			const { models } = (await res.json()) as {
+				models?: Array<{ name: string }>;
+			};
+			if (models?.some((m) => m.name === plan.defaultLocalModel)) {
+				return {
+					type: "ollama",
+					model: plan.defaultLocalModel,
+					baseUrl,
+					maxTokens: 4096,
+					contextTokens: 8192,
+				};
+			}
+		} catch {
+			/* ollama not running — fall through to the saved brain */
+		}
+	}
+	try {
+		const { homedir } = await import("node:os");
+		const { join } = await import("node:path");
+		const { readFileSync } = await import("node:fs");
+		const cfg = JSON.parse(
+			readFileSync(join(homedir(), ".harnage", "config.json"), "utf-8"),
+		) as Record<string, unknown>;
+		if (typeof cfg.model === "string" && typeof cfg.type === "string") {
+			return {
+				...cfg,
+				type: cfg.type,
+				model: cfg.model,
+				contextTokens: 8192,
+			};
+		}
+	} catch {
+		/* no saved config */
+	}
+	return undefined;
+}
+
+/** A poor score is usually the model, not the harness — name the next one up. */
+function strongerModelAdvice(
+	plan: HarnessPlan,
+	report: AcceptanceReport,
+): string {
+	const failed = report.tasks
+		.filter((t) => !t.pass)
+		.map((t) => t.id)
+		.join(", ");
+	const domain = classifyDomain(plan.description);
+	const bigger = recommendModels(domain, 64)
+		.filter((r) => r.id !== report.model)
+		.slice(0, 2)
+		.map((r) => `${r.id} (~${r.ramGb}GB)`)
+		.join(" or ");
+	return `failed: ${failed}. A stronger model on this same harness usually clears the bar${bigger ? ` — try ${bigger}` : ""}.`;
+}
+
+function persistAcceptance(plan: HarnessPlan, report: AcceptanceReport): void {
+	if (report.skipped) return;
+	try {
+		const ts = new Date().toISOString();
+		const rows = report.tasks
+			// Infra errors are not measurements — keeping them out of the moat file
+			// stops a rate-limited afternoon looking like a model regression later.
+			.filter((t) => !t.errored)
+			.map((t) =>
+				JSON.stringify({
+					ts,
+					kind: "acceptance",
+					harness: plan.name,
+					model: report.model,
+					tier: report.tier,
+					loop: report.loop,
+					task: t.id,
+					pass: t.pass,
+					ms: t.ms,
+				}),
+			)
+			.join("\n");
+		if (!rows) return;
+		const dir = join(homedir(), ".harnage");
+		mkdirSync(dir, { recursive: true });
+		appendFileSync(join(dir, "eval-results.jsonl"), `${rows}\n`);
+	} catch {
+		/* best-effort — never fail a build on telemetry */
+	}
 }

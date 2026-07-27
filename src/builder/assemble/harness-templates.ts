@@ -1,4 +1,5 @@
 import type { HarnessPlan } from "../index";
+import { classifyDomain, domainToolPriority } from "../models/catalog";
 
 /**
  * Templates for the generated harness's subsystem modules — the features
@@ -1012,11 +1013,18 @@ export function resolveToolByName(tools: Tool[], rawName: string): Tool | undefi
 
 // Always-keep tools; glob/grep/file_write compete by goal relevance so a tight
 // small-model budget still leaves room for the tool the task actually needs.
-const CORE_TOOLS = ["file_read", "bash"];
+// Ranked for THIS harness's domain at build time. Every harness ships the full
+// tool kit — withholding capability by domain is guesswork that leaves an agent
+// unable to do its job. What a domain changes is which tools the model sees
+// FIRST when the budget is tight, since a small model can only be shown a few.
+const DOMAIN_TOOL_PRIORITY: string[] = ${JSON.stringify(domainToolPriority(classifyDomain(`${plan.description ?? ""} ${(plan.systemPrompt ?? "").slice(0, 400)}`)))};
+const CORE_TOOLS = DOMAIN_TOOL_PRIORITY.slice(0, 2);
 
 /** Cap the exposed tool set to the profile budget (ACI principle): keep the
  * core tools plus the ones most relevant to the goal. Small models' tool-call
- * accuracy collapses past ~5-8 tools — fewer, better tools recover the gap. */
+ * accuracy collapses past ~5-8 tools — fewer, better tools recover the gap.
+ * Ties break on the domain ranking, so a docs harness reaches for grep where a
+ * code harness reaches for bash. */
 export function selectTools(tools: Tool[], goal: string, maxTools: number): Tool[] {
   if (tools.length <= maxTools) return tools;
   const lower = goal.toLowerCase();
@@ -1030,7 +1038,14 @@ export function selectTools(tools: Tool[], goal: string, maxTools: number): Tool
       const descHit = words.some(w => desc.includes(w)) ? 1 : 0;
       return { t, score: nameHit + descHit };
     })
-    .sort((a, b) => b.score - a.score);
+    // Goal relevance still wins; the domain ranking only breaks ties, which is
+    // most of the time — a bare "summarize this" hits no tool name or keyword.
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const ai = DOMAIN_TOOL_PRIORITY.indexOf(a.t.name);
+      const bi = DOMAIN_TOOL_PRIORITY.indexOf(b.t.name);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
   const picked = [...core];
   for (const { t } of scored) {
     if (picked.length >= maxTools) break;
@@ -1054,16 +1069,79 @@ export function compactToolOutput(output: string, maxChars = 2000): string {
 // Grammar-forced decision schema for constrained-json dispatch. Under Ollama
 // \`format\`, a small model physically cannot narrate — it must emit exactly one
 // of: {action:"tool", tool, args} | {action:"final", answer}.
-const DECISION_SCHEMA = {
-  type: "object",
-  properties: {
-    action: { type: "string", enum: ["tool", "final"] },
-    tool: { type: "string" },
-    args: { type: "object" },
-    answer: { type: "string" },
-  },
-  required: ["action"],
-};
+// \`tool\` is an ENUM of the tools actually exposed this turn, not a free string.
+// A free string let the model invent a name — observed on qwen2.5:3b as
+// \`GrepTool{"pattern":"x"}\` — which then had to be repaired downstream. An enum
+// makes an unknown tool name structurally impossible to emit, so the whole
+// malformation class disappears at decode time instead of being tolerated.
+//
+// forceTool drops "final" from the action enum: the model CANNOT stop, it can
+// only act. Used as the last resort when the goal demands an artifact the model
+// has not produced (see the outcome check in the decision loop).
+function decisionSchema(toolNames: string[], forceTool = false): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: forceTool ? ["tool"] : ["tool", "final"] },
+      tool: toolNames.length ? { type: "string", enum: toolNames } : { type: "string" },
+      args: { type: "object" },
+      answer: { type: "string" },
+    },
+    required: forceTool ? ["action", "tool"] : ["action"],
+  };
+}
+
+/**
+ * The same decision, but with \`args\` TYPED PER TOOL via a discriminated union.
+ *
+ * decisionSchema constrains which tool may be named; it cannot stop the model
+ * filling the wrong argument names ({tool:"file_write", args:{filename:"x"}}
+ * satisfies \`args:{type:"object"}\` and then fails at call time). A oneOf keyed
+ * on the tool name pushes that into the grammar: the decoder can only produce
+ * argument keys the tool actually declares. This is the difference between
+ * telling a small model the rules and making the rules unbreakable.
+ *
+ * Falls back to the flat schema when no tool exposes a usable JSON schema —
+ * a union with an empty branch would constrain the model to nothing.
+ */
+function typedDecisionSchema(
+  tools: Tool[],
+  forceTool = false,
+): Record<string, unknown> {
+  const branches: Array<Record<string, unknown>> = [];
+  for (const t of tools) {
+    const schema = t.inputSchema?.toJSONSchema?.() as
+      | { properties?: Record<string, unknown>; required?: string[] }
+      | undefined;
+    if (!schema?.properties || Object.keys(schema.properties).length === 0) continue;
+    branches.push({
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["tool"] },
+        tool: { type: "string", enum: [t.name] },
+        args: {
+          type: "object",
+          properties: schema.properties,
+          required: schema.required ?? [],
+          additionalProperties: false,
+        },
+      },
+      required: ["action", "tool", "args"],
+    });
+  }
+  if (!branches.length) return decisionSchema(tools.map(t => t.name), forceTool);
+  if (!forceTool) {
+    branches.push({
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["final"] },
+        answer: { type: "string" },
+      },
+      required: ["action", "answer"],
+    });
+  }
+  return { oneOf: branches };
+}
 
 // Grammar for memory consolidation. Passing this as the decode \`format\` makes
 // Ollama (and hosted response_format) emit valid JSON, so a 3B model extracts
@@ -1091,6 +1169,29 @@ const CONSOLIDATION_SCHEMA = {
   },
   required: ["facts", "events"],
 };
+
+/**
+ * The file a goal asks the agent to PRODUCE, if it names one.
+ *
+ * This exists because act-forcing is not enough. The act-before-answer nudge
+ * only fires when NO tool was used, and the observed small-model failure gets
+ * past it: given "create hello.txt containing HELLO", qwen2.5:3b called glob and
+ * file_read (so toolsUsed > 0) and then finalized with "to create a file you
+ * need to run a command…" — it used a tool, just never the one that finishes the
+ * job. Checking the artifact is the only signal that catches that, and it costs
+ * no model call.
+ *
+ * Deliberately conservative: only creation verbs, only an explicit filename with
+ * an extension. A goal that names no artifact returns null and nothing changes.
+ */
+function requestedArtifact(goal: string): string | null {
+  if (!/\\b(creat|writ|generat|sav|output|produc|export)\\w*\\b/i.test(goal)) return null;
+  const m = goal.match(/(?:named|called|file|to|into|as)\\s+[\`'"]?([\\w.\\-\\/]+\\.[a-z0-9]{1,6})[\`'"]?/i)
+    ?? goal.match(/[\`'"]([\\w.\\-\\/]+\\.[a-z0-9]{1,6})[\`'"]/);
+  const path = m?.[1];
+  if (!path || path.startsWith("/") || path.includes("..")) return null;
+  return path;
+}
 
 interface Decision { action: "tool" | "final"; tool?: string; args?: Record<string, unknown>; answer?: string; }
 
@@ -1797,7 +1898,18 @@ export class LoopEngine {
       const params = schema?.properties ? Object.keys(schema.properties).join(", ") : "";
       return \`- \${t.name}(\${params}): \${t.description}\`;
     }).join("\\n");
-    const decode = { format: DECISION_SCHEMA, temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty, signal: this.abortController.signal };
+    const toolNames = selected.map(t => t.name);
+    const baseDecode = { temperature: this.profile.temperature, repeatPenalty: this.profile.repeatPenalty, signal: this.abortController.signal };
+    // The artifact this goal demands, if it names one. Checked before a final
+    // answer is accepted — see the outcome block below.
+    const wanted = requestedArtifact(goal);
+    let outcomeForced = false;
+    // Set for exactly one turn after an outcome refusal.
+    let forceActNow = false;
+    // Per-tool typed args (a oneOf grammar). Strictly stronger than the flat
+    // schema, but it leans on the host compiling a union — if a provider rejects
+    // it, drop to the flat schema for the rest of the run rather than failing.
+    let useTypedArgs = true;
     let toolsUsed = 0;
     let actNudged = false;
     let verifyChecked = false;
@@ -1842,9 +1954,31 @@ export class LoopEngine {
       // is narrated via tool_use / final events instead.
       this.onEvent?.({ type: "status", content: "deciding next step" });
       let raw = "";
+      // Grammar is recomputed each turn: right after an outcome refusal the
+      // schema has no "final" branch, so the model can only emit a tool call.
+      const decode = {
+        ...baseDecode,
+        format: useTypedArgs
+          ? typedDecisionSchema(selected, forceActNow)
+          : decisionSchema(toolNames, forceActNow),
+      };
+      forceActNow = false;
+      let schemaRejected = false;
       for await (const e of streamProvider(this.config, reqMessages, undefined, decode)) {
         if (e.type === "text") raw += e.content ?? "";
-        if (e.type === "error") return \`Error: \${e.content}\`;
+        if (e.type === "error") {
+          // Host couldn't compile the union grammar — fall back, don't die.
+          if (useTypedArgs && /format|schema|grammar|oneOf/i.test(e.content ?? "")) {
+            schemaRejected = true;
+            break;
+          }
+          return \`Error: \${e.content}\`;
+        }
+      }
+      if (schemaRejected) {
+        useTypedArgs = false;
+        this.onEvent?.({ type: "status", content: "provider rejected the typed grammar — using the flat schema" });
+        continue;
       }
 
       const decision = parseDecision(raw);
@@ -1948,6 +2082,29 @@ export class LoopEngine {
             ? \`The working directory actually contains these files: \${listing}. Do NOT assume a subdirectory like src/ — read paths relative to the current directory. If the item you called missing is in that list, read it and correct your answer; only conclude absence if it is truly not listed.\`
             : "Before finalizing: verify with a tool, reading paths relative to the current directory (do not assume a src/ prefix). Correct your answer if the item actually exists." });
           continue;
+        }
+        // OUTCOME CHECK: the goal named a file to produce and that file is not
+        // there. No amount of prose makes that a completed task, so the answer
+        // is refused and the next turn is GRAMMAR-FORCED to act — "final" is
+        // removed from the schema, so the model cannot stop again. This is the
+        // one backstop that catches the observed failure where the model used
+        // some other tool first, which every toolsUsed===0 check misses.
+        if (wanted && !outcomeForced && this.tools.length > 0) {
+          let produced = false;
+          try {
+            produced = (await import("node:fs")).existsSync(
+              (await import("node:path")).resolve(process.cwd(), wanted),
+            );
+          } catch { produced = true; /* can't check — don't block on it */ }
+          if (!produced) {
+            outcomeForced = true;
+            forceActNow = true;
+            this.safety.recordFailure();
+            this.onEvent?.({ type: "status", content: \`forcing creation of \${wanted}\` });
+            this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+            this.messages.push({ role: "user", content: \`The goal was to create "\${wanted}", and that file does not exist yet. Describing how to create it is not doing it. Call the file_write tool now with path "\${wanted}" and the exact required content.\` });
+            continue;
+          }
         }
         // Final-with-intent: small models "finish" by ANNOUNCING the next step
         // ("Next, I will extract commit messages...") instead of doing it.

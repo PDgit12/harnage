@@ -201,6 +201,9 @@ if (buildModel) {
 			contextTokens: 8192,
 		}),
 		maxRepairs: 1,
+		// The battery below IS the runtime measurement — no need to run a second
+		// one inside the build.
+		acceptance: false,
 	};
 	console.log(`Building a generated harness with build-model ${buildModel}…`);
 } else {
@@ -233,7 +236,15 @@ const { resolveProfile } = (await import(join(gen, "src/profiles.ts"))) as {
 	resolveProfile: (m: string, ctx?: number) => Record<string, unknown>;
 };
 
+// Profile override for A/B experiments — the "tune" half of the measure→tune
+// flywheel. e.g. EVAL_PROFILE='{"toolCalling":"native","loop":"free"}' asks
+// whether a tool-tuned small model does better on its NATIVE tool-call channel
+// than on the constrained-json text channel it is given by default.
 const profile = resolveProfile(model, 8192);
+if (process.env.EVAL_PROFILE) {
+	Object.assign(profile, JSON.parse(process.env.EVAL_PROFILE));
+	console.log(`Profile override: ${process.env.EVAL_PROFILE}`);
+}
 const tools = await getAllTools();
 const providerConfig = {
 	type: "ollama",
@@ -293,6 +304,16 @@ interface Sample {
 	ms: number;
 	detail: string;
 	judged: boolean;
+	/** Provider/transport failure — the task never got a verdict, so it is not
+	 *  evidence about the model. Excluded from the score. Learned the hard way:
+	 *  Ollama died mid-run and turned a measurement into a fake 1/20. */
+	errored?: boolean;
+}
+
+function isInfraError(message: string): boolean {
+	return /\b(429|401|403|5\d\d)\b|rate limit|quota|unauthorized|invalid api key|unable to connect|timed? ?out|econnrefused|fetch failed|request failed|network/i.test(
+		message,
+	);
 }
 
 async function runSample(task: Task, fx: string): Promise<Sample> {
@@ -312,7 +333,14 @@ async function runSample(task: Task, fx: string): Promise<Sample> {
 		err = e instanceof Error ? e.message : String(e);
 	}
 	const ms = Math.round(performance.now() - started);
-	if (err) return { pass: false, ms, detail: err, judged: false };
+	if (err)
+		return {
+			pass: false,
+			ms,
+			detail: err,
+			judged: false,
+			errored: isInfraError(err),
+		};
 
 	// Deterministic check GATES: a judge never overrides a factual miss.
 	if (task.check && !task.check(out, fx)) {
@@ -346,6 +374,10 @@ const ts = new Date().toISOString();
 
 let passAt1 = 0;
 let passAtK = 0;
+let consecutiveInfra = 0;
+let aborted = false;
+let scoredTasks = 0;
+let erroredTasks = 0;
 const byCat: Record<string, { pass: number; total: number }> = {};
 const byDiff: Record<string, { pass: number; total: number }> = {};
 
@@ -371,27 +403,48 @@ for (const task of selected) {
 			difficulty: task.difficulty,
 			sample: i,
 			pass: samples[i].pass,
+			errored: samples[i].errored ?? false,
 			judged: samples[i].judged,
 			ms: samples[i].ms,
 		});
 	}
 
+	// A dead provider produces a full run of zeros that reads like a model
+	// regression. Stop and say so instead of publishing a fake number.
+	if (samples.every((s) => s.errored)) {
+		consecutiveInfra++;
+		if (consecutiveInfra >= 3) {
+			console.error(
+				`\nABORTED — ${consecutiveInfra} consecutive provider errors (last: ${samples[0].detail.slice(0, 120)}).\n` +
+					"Nothing was measured. Fix the provider and re-run; no score is reported.",
+			);
+			aborted = true;
+			break;
+		}
+	} else {
+		consecutiveInfra = 0;
+	}
+
 	const first = samples[0];
 	const any = samples.some((s) => s.pass);
-	if (first.pass) passAt1++;
-	if (any) passAtK++;
-
-	byCat[task.category] ??= { pass: 0, total: 0 };
-	byCat[task.category].total++;
-	if (first.pass) byCat[task.category].pass++;
-	byDiff[task.difficulty] ??= { pass: 0, total: 0 };
-	byDiff[task.difficulty].total++;
-	if (first.pass) byDiff[task.difficulty].pass++;
+	if (first.errored) {
+		erroredTasks++;
+	} else {
+		scoredTasks++;
+		if (first.pass) passAt1++;
+		if (any) passAtK++;
+		byCat[task.category] ??= { pass: 0, total: 0 };
+		byCat[task.category].total++;
+		if (first.pass) byCat[task.category].pass++;
+		byDiff[task.difficulty] ??= { pass: 0, total: 0 };
+		byDiff[task.difficulty].total++;
+		if (first.pass) byDiff[task.difficulty].pass++;
+	}
 
 	const medianMs = samples.map((s) => s.ms).sort((a, b) => a - b)[
 		Math.floor(samples.length / 2)
 	];
-	const mark = first.pass ? "✓" : any ? "~" : "✗";
+	const mark = first.errored ? "!" : first.pass ? "✓" : any ? "~" : "✗";
 	console.log(
 		`${mark} ${task.id.padEnd(28)} ${task.difficulty.padEnd(6)} ${String(Math.round(medianMs / 100) / 10).padStart(6)}s`,
 	);
@@ -402,6 +455,12 @@ for (const task of selected) {
 
 process.chdir(originalCwd);
 
+if (aborted) {
+	await rm(buildRoot, { recursive: true, force: true });
+	await rm(fixture, { recursive: true, force: true });
+	process.exit(2);
+}
+
 // ─── Report ────────────────────────────────────────────────────────────────
 const line = (rec: Record<string, { pass: number; total: number }>) =>
 	Object.entries(rec)
@@ -410,11 +469,15 @@ const line = (rec: Record<string, { pass: number; total: number }>) =>
 
 const tier = String(profile.tier);
 const barFraction = TIER_BAR[tier] ?? 1;
-const bar = Math.ceil(barFraction * selected.length);
-const gatePass = passAt1 >= bar;
+const bar = Math.ceil(barFraction * scoredTasks);
+const gatePass = scoredTasks > 0 && passAt1 >= bar;
 
-console.log(`\n${passAt1}/${selected.length} passed (pass@1)`);
-if (k > 1) console.log(`${passAtK}/${selected.length} passed (pass@${k})`);
+console.log(`\n${passAt1}/${scoredTasks} passed (pass@1)`);
+if (erroredTasks)
+	console.log(
+		`${erroredTasks} task(s) excluded — provider error, not a verdict on the model`,
+	);
+if (k > 1) console.log(`${passAtK}/${scoredTasks} passed (pass@${k})`);
 console.log(`  by category   ${line(byCat)}`);
 console.log(`  by difficulty ${line(byDiff)}`);
 if (calibration) {
@@ -423,7 +486,7 @@ if (calibration) {
 	);
 }
 console.log(
-	`\nbar ${bar}/${selected.length} (${Math.round(barFraction * 100)}% for ${tier} tier) → ${gatePass ? "PASS" : "FAIL"}`,
+	`\nbar ${bar}/${scoredTasks} (${Math.round(barFraction * 100)}% for ${tier} tier) → ${gatePass ? "PASS" : "FAIL"}`,
 );
 console.log(`results appended → ${RESULTS_PATH}\n`);
 

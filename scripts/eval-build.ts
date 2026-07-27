@@ -277,6 +277,10 @@ if (buildModel) {
 			contextTokens: 8192,
 		}),
 		maxRepairs: 2,
+		// This script asserts the build COMPILES across 10 prompts; executing an
+		// acceptance battery per prompt would multiply its runtime for a signal
+		// scripts/eval.ts already covers.
+		acceptance: false,
 	};
 	console.log(`Build brain: ${buildModel}`);
 } else {

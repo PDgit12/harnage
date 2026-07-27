@@ -200,6 +200,46 @@ export function classifyDomain(text: string): WorkType {
 	return "general";
 }
 
+// Every harness ships the full kit. Withholding tools by domain looks like
+// specialisation but is really guesswork: an "n8n automation" prompt classifies
+// as general, and dropping bash/web_fetch left it with no way to reach an HTTP
+// endpoint at all. Capability is cheap to ship and expensive to be missing.
+//
+// Specialisation lives in how the tools are SELECTED, PRESENTED and RANKED per
+// task — see domainToolPriority below and selectTools in the generated engine.
+export const BASELINE_TOOLS = [
+	"bash",
+	"file_read",
+	"file_write",
+	"file_edit",
+	"glob",
+	"grep",
+];
+
+/**
+ * Which tools a domain reaches for FIRST. The generated engine can only expose
+ * `profile.maxTools` per turn (small models' tool-call accuracy collapses past
+ * ~5-8), so on a tight budget the ordering decides what the model can even see.
+ * A docs agent should get grep before bash; a code agent the reverse.
+ *
+ * Ordering only — nothing is removed. Anything not listed keeps its existing
+ * goal-relevance ranking behind these.
+ */
+export function domainToolPriority(domain: WorkType): string[] {
+	switch (domain) {
+		case "code":
+			return ["file_read", "bash", "grep", "glob", "file_edit", "file_write"];
+		case "review":
+			return ["file_read", "grep", "bash", "glob", "file_edit", "file_write"];
+		case "data":
+			return ["file_read", "glob", "bash", "file_write", "grep", "file_edit"];
+		case "docs":
+			return ["file_read", "grep", "glob", "file_write", "web_fetch", "bash"];
+		default:
+			return ["file_read", "file_write", "web_fetch", "bash", "glob", "grep"];
+	}
+}
+
 export interface FamilyInfo {
 	params: number;
 	family: string;
