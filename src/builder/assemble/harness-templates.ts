@@ -1021,8 +1021,7 @@ export function splitToolCallName(raw: string, input: Record<string, unknown>): 
 /**
  * OpenAI-compatible chat endpoint for a base URL, appending /v1 only when it
  * isn't already there. Every provider documents its base WITH the version
- * (https://api.groq.com/openai/v1, https://openrouter.ai/api/v1,
- * https://api.openai.com/v1), so blindly appending "/v1/chat/completions"
+ * already on it, so blindly appending "/v1/chat/completions"
  * produced .../v1/v1/chat/completions and a 404 on the very first call — for the
  * DEFAULT base URL too. Bases that omit it (a local proxy on :8080) still work.
  */
