@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renderAcceptanceMd } from "../src/builder/acceptance-run";
+import {
+	optimizationCandidates,
+	renderAcceptanceMd,
+} from "../src/builder/acceptance-run";
 import {
 	ENGINE_TEMPLATE,
 	HARNESS_PERMISSIONS,
@@ -453,5 +456,76 @@ describe("bash permission matcher", () => {
 				"a>b.txt",
 			),
 		).toBe(true);
+	});
+});
+
+// The optimize loop is what makes a delivered harness TUNED rather than merely
+// tested. Its candidates must come from HOW it failed — a blind sweep costs
+// several minutes of battery per variant for combinations unrelated to the
+// observed failure.
+describe("acceptance optimize loop", () => {
+	const report = (
+		tasks: Array<{ pass: boolean; detail: string; errored?: boolean }>,
+	) =>
+		({
+			model: "m",
+			tier: "small",
+			loop: "pipeline",
+			passed: tasks.filter((t) => t.pass).length,
+			total: tasks.length,
+			bar: tasks.length,
+			met: false,
+			tasks: tasks.map((t, i) => ({ id: `t${i}`, ms: 1, ...t })),
+		}) as Parameters<typeof optimizationCandidates>[0];
+
+	it("prescribes act-forcing when the model described the work", () => {
+		const c = optimizationCandidates(
+			report([
+				{ pass: false, detail: 'you need to run `echo "HELLO" > hello.txt`' },
+			]),
+		);
+		expect(c[0].override.nudge).toBe(true);
+		expect(c[0].override.loop).toBe("pipeline");
+	});
+
+	it("prescribes tighter grounding when it reached for absent things", () => {
+		const c = optimizationCandidates(
+			report([
+				{ pass: false, detail: "the file src/util/x.ts does not exist" },
+			]),
+		);
+		expect(c[0].override.maxTools).toBe(3);
+		expect(c[0].override.temperature).toBe(0);
+	});
+
+	it("falls back to the tightest scaffold when failures are not diagnostic", () => {
+		const c = optimizationCandidates(
+			report([{ pass: false, detail: "wrong" }]),
+		);
+		expect(c).toHaveLength(1);
+		expect(c[0].override.loop).toBe("pipeline");
+	});
+
+	it("ignores infra-errored tasks when choosing a candidate", () => {
+		// A rate limit says nothing about the scaffold; tuning on it would be
+		// chasing noise.
+		const c = optimizationCandidates(
+			report([
+				{ pass: false, detail: "openai 429 rate limit", errored: true },
+				{ pass: false, detail: "you should run this in your terminal" },
+			]),
+		);
+		expect(c[0].override.nudge).toBe(true);
+	});
+
+	it("never proposes more than two retries", () => {
+		const c = optimizationCandidates(
+			report([
+				{ pass: false, detail: "you need to run echo foo" },
+				{ pass: false, detail: "does not exist" },
+				{ pass: false, detail: "unknown tool" },
+			]),
+		);
+		expect(c.length).toBeLessThanOrEqual(2);
 	});
 });

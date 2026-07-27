@@ -608,9 +608,65 @@ async function runBuildAcceptance(
 			? `NOTE: this harness was built for ${builtFor}, which is not installed. Pull it (ollama pull ${builtFor}) and re-run to score the model you will actually use.`
 			: undefined,
 	});
-	const report = await runAcceptance(outputDir, tasks, runtime, (line) =>
+	let report = await runAcceptance(outputDir, tasks, runtime, (line) =>
 		onProgress?.({ stage: "verifying", message: line }),
 	);
+
+	// OPTIMIZE: below bar is not the end of the build. Re-run the same battery
+	// under scaffolds chosen from HOW it failed, keep the best, and bake the
+	// winner into the harness the user receives — so what ships is the scaffold
+	// that actually scored highest on their domain, on their model, rather than
+	// the one a size tier guessed. This is the difference between a harness that
+	// was tested and one that was tuned.
+	if (!report.met && !report.skipped) {
+		const { optimizeAcceptance } = await import("./acceptance-run");
+		onProgress?.({
+			stage: "verifying",
+			message: `Below bar — retuning the scaffold and re-running...`,
+		});
+		const { best, tried } = await optimizeAcceptance(
+			outputDir,
+			tasks,
+			runtime,
+			report,
+			(line) => onProgress?.({ stage: "verifying", message: line }),
+		);
+		if (best.passed > report.passed && best.profile) {
+			// Persist the winner: rewrite profiles.ts so the delivered harness runs
+			// under the scaffold that measured best, not the one it was built with.
+			const merged = {
+				...(plan.modelProfileOverrides ?? {}),
+				[runtime.model.toLowerCase()]: {
+					...((plan.modelProfileOverrides ?? {})[runtime.model.toLowerCase()] as
+						| Record<string, unknown>
+						| undefined),
+					...best.profile,
+				},
+			};
+			plan.modelProfileOverrides = merged;
+			try {
+				const { HARNESS_PROFILES } = await import(
+					"./assemble/harness-templates"
+				);
+				await writeFile(
+					join(outputDir, "src", "profiles.ts"),
+					HARNESS_PROFILES(merged, plan.name),
+				);
+				onProgress?.({
+					stage: "verifying",
+					message: `Baked the winning scaffold into the harness (${report.passed}/${report.total} → ${best.passed}/${best.total} after ${tried} retry(s))`,
+				});
+			} catch (err) {
+				onProgress?.({
+					stage: "verifying",
+					message:
+						"Could not persist the tuned scaffold — shipping the default",
+					detail: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+		report = best;
+	}
 
 	await writeFile(
 		join(outputDir, "ACCEPTANCE.md"),

@@ -49,7 +49,7 @@ export type Expectation = z.infer<typeof ExpectationSchema>;
 export type AcceptanceTask = z.infer<typeof AcceptanceTaskSchema>;
 
 const AcceptancePlanSchema = z.object({
-	tasks: z.array(AcceptanceTaskSchema).min(1).max(10),
+	tasks: z.array(AcceptanceTaskSchema).min(1).max(24),
 });
 
 /** A path is usable only if it stays inside the fixture dir. Mirrors the same
@@ -140,6 +140,11 @@ export async function runGenerateAcceptance(
 	provider: Provider,
 	plan: HarnessPlan,
 	purpose: string,
+	/** How many tasks to ask for. The default is deliberately larger than a
+	 *  smoke test: this battery is the evidence the user is handed with their
+	 *  harness, and six tasks cannot characterise a domain. Build time is a
+	 *  one-off cost for something they will run for months. */
+	count = 12,
 ): Promise<AcceptanceTask[]> {
 	const bespoke = [
 		...(plan.customCommands ?? []).map((c) => `/${c.name}: ${c.description}`),
@@ -155,7 +160,7 @@ Purpose: ${purpose}
 Capabilities:
 ${bespoke}
 
-Write 6 tasks that a WORKING harness passes and a broken one fails. Rules:
+Write ${count} tasks that a WORKING harness passes and a broken one fails. Rules:
 - Each task is a concrete goal the agent is given, in this harness's real domain.
 - The agent runs in an empty temp directory. If a task needs input files, declare them in "fixture" — do not assume anything else exists.
 - "expect" is how the task is graded, one of:
@@ -164,7 +169,8 @@ Write 6 tasks that a WORKING harness passes and a broken one fails. Rules:
   - {"type":"file_exists","path":"<file the agent must create>"}
   - {"type":"file_contains","path":"<file>","value":"<substring it must contain>"}
 - Expectation values must be at least 3 characters and must be things a CORRECT answer really contains — a fact, a number, a filename. Never grade on filler words.
-- Cover a mix: at least 2 that make the agent WRITE a file, at least 1 where the requested thing does not exist and the agent must say so.
+- Cover a mix: at least 3 that make the agent WRITE a file, at least 2 where the requested thing does not exist and the agent must say so, and a spread of easy/hard.
+- Vary the tasks — do not restate one task ${count} ways. Each should exercise a different capability the agent's purpose implies.
 - ids look like "area:short-name".
 
 Example output:
