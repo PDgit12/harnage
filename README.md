@@ -8,7 +8,7 @@ A good harness *amplifies* what a model can do — it doesn't automate the model
 Describe the agent you want; harnage builds you a fully-owned, Claude Code-level harness
 for it, tuned so even a small local model performs at its ceiling.
 
-[![npm](https://img.shields.io/badge/npm-harnage%400.1.0-cb3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/harnage)
+[![npm](https://img.shields.io/badge/npm-harnage%400.6.0-cb3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/harnage)
 [![Runtime: Bun ≥1.1](https://img.shields.io/badge/runtime-bun%20%E2%89%A51.1-fbf0df?logo=bun&logoColor=black)](https://bun.sh)
 [![Tests: 203 passing](https://img.shields.io/badge/tests-203%20passing-brightgreen)](#development)
 [![TypeScript 5](https://img.shields.io/badge/typescript-5-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -109,7 +109,7 @@ _Coming soon — asciinema/GIF walkthrough of `harnage init` → generated harne
 
 ```bash
 bun run typecheck   # tsc --noEmit
-bun run test        # vitest — 46 files, 312 tests passing
+bun run test        # vitest — 49 files, 357 tests passing
 bun run lint        # biome check src/
 bun run build       # compile binary
 ```
@@ -173,7 +173,7 @@ below 75% agreement** rather than silently trusted.
 
 ## Status
 
-Published: `harnage@0.5.0` on npm, FSL-1.1-ALv2 licensed, prebuilt binaries on GitHub releases. Working:
+Published: `harnage@0.6.0` on npm, FSL-1.1-ALv2 licensed, prebuilt binaries on GitHub releases. Working:
 builder end-to-end (API + local + offline paths), reference harness (including MCP-server-consumer
 mode), all 9 tools, path-rule permissions, memory, eval, TUI. In progress: external-MCP consumption
 in *generated* harnesses (the `harnage` CLI itself already consumes MCP servers). No interactive
