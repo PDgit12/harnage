@@ -62,14 +62,43 @@ function resolveBase(model: string, contextTokens = 8192): ModelProfile {
       editFormat: "search-replace", systemPromptBudget: 8000, temperature: 0.2, nudge: true, contextTokens };
   }
 
-  // Small models (<=3.5B or known small families): fixed pipeline, minimal
+  // Bands are finer than tier LABELS on purpose. The labels feed the eval/
+  // acceptance pass bars, so they stay at four; the scaffolding underneath is
+  // graded, because "mid" used to span 4B-12B — a 3.5x capability range given
+  // one setting. A 4B is far closer to a 3B than to a 12B.
+
+  // <=3.5B, or a family known to behave like one: fixed pipeline, minimal
   // tools, grammar-forced JSON so narration is physically impossible.
   if ((size > 0 && size <= 3.5) || /phi|tinyllama|gemma:2b|llama3\\.2/.test(m)) {
     return { tier: "small", loop: "pipeline", toolCalling: "constrained-json", maxTools: 4,
       editFormat: "whole-file", systemPromptBudget: 1600, temperature: 0, repeatPenalty: 1.15, nudge: false, contextTokens };
   }
 
-  // Mid models (7-8B) and unknown: plan-act + constrained JSON (safe default).
+  // 3.5-6B: still small-tier discipline (pipeline, grammar-forced JSON) with a
+  // little more room. Measured evidence at 3B says the constrained grammar
+  // beats native tool-calling 14/20 vs 7/20 — do not hand these models the
+  // native channel just because they are slightly bigger.
+  if (size > 0 && size <= 6) {
+    return { tier: "small", loop: "pipeline", toolCalling: "constrained-json", maxTools: 5,
+      editFormat: "whole-file", systemPromptBudget: 2000, temperature: 0.05, repeatPenalty: 1.1, nudge: false, contextTokens };
+  }
+
+  // 6-9B: the classic mid band — plan-act, still constrained JSON.
+  if (size > 0 && size <= 9) {
+    return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 5,
+      editFormat: "whole-file", systemPromptBudget: 2400, temperature: 0.1, repeatPenalty: 1.1, nudge: false, contextTokens };
+  }
+
+  // 9-13B: approaching strong. More tools and prompt budget, and search-replace
+  // edits (whole-file rewrites waste context at this size), but the dispatch
+  // stays constrained until there is measured evidence native is better here.
+  if (size > 0 && size < 13) {
+    return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 6,
+      editFormat: "search-replace", systemPromptBudget: 4000, temperature: 0.15, repeatPenalty: 1.05, nudge: false, contextTokens };
+  }
+
+  // Unknown size (no parseable parameter count): the mid defaults are the safe
+  // assumption — never assume a model is strong when we cannot tell.
   return { tier: "mid", loop: "plan-act", toolCalling: "constrained-json", maxTools: 5,
     editFormat: "whole-file", systemPromptBudget: 2400, temperature: 0.1, repeatPenalty: 1.1, nudge: false, contextTokens };
 }

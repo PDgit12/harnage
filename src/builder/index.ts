@@ -82,6 +82,9 @@ export interface BuildOptions {
 	ask?: AskFn;
 	/** Max verify-repair iterations after a failed build. Default 2. */
 	maxRepairs?: number;
+	/** Probe the chosen model before generating, and bake the MEASURED scaffold
+	 *  instead of the size-tier guess. Default true. */
+	characterize?: boolean;
 	/** Run the domain acceptance battery on the chosen model after a successful
 	 *  build. Default true — a harness nobody executed is a harness nobody knows
 	 *  works. Set false for batch/CI callers that only care that it compiles. */
@@ -143,6 +146,45 @@ export function generatePlan(spec: StructuredSpec): HarnessPlan {
 		}),
 		hasMcp,
 	};
+}
+
+/**
+ * Probe the chosen local model and return the scaffold overrides MEASUREMENT
+ * justifies. Best-effort throughout: an unreachable model, a timeout, or any
+ * error yields undefined and the caller keeps its catalog/size-tier defaults —
+ * characterization can never make a build worse than skipping it.
+ */
+async function characterizeChosenModel(
+	model: string,
+	onProgress?: (p: BuildProgress) => void,
+): Promise<Record<string, unknown> | undefined> {
+	try {
+		const { createProvider } = await import("../services/api/client");
+		const { characterizeModel, describeCharacterization } = await import(
+			"./models/characterize"
+		);
+		onProgress?.({
+			stage: "planning",
+			message: `Characterizing ${model} before generating for it...`,
+		});
+		const provider = createProvider({
+			type: "ollama",
+			model,
+			baseUrl: "http://localhost:11434",
+			maxTokens: 512,
+			contextTokens: 8192,
+		});
+		const c = await characterizeModel(provider);
+		onProgress?.({
+			stage: "planning",
+			message: `Model profile: ${describeCharacterization(c)}`,
+		});
+		return Object.keys(c.override).length
+			? (c.override as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function llmPlan(
@@ -427,14 +469,29 @@ export async function buildHarness(
 		}
 	}
 
-	// Bake the chosen model's curated scaffold overrides (catalog models only)
-	// into profiles.ts — per-model tuning, not just size-tier.
+	// Bake the chosen model's scaffold into profiles.ts. Three sources, weakest
+	// to strongest: the size tier (a guess from the parameter count), the
+	// curated catalog entry (hand-tuned per model), and MEASUREMENT — probing
+	// the real endpoint before generating anything for it. Measurement wins,
+	// because the size tier has been demonstrably wrong: constrained-json beat
+	// native tool-calling 14/20 to 7/20 on a model whose size would have been
+	// handed the native channel.
 	if (plan.defaultLocalModel) {
-		const ov = catalogOverrides(plan.defaultLocalModel);
-		if (ov)
+		const ov = catalogOverrides(plan.defaultLocalModel) ?? {};
+		let measured: Record<string, unknown> = {};
+		if (options?.characterize !== false) {
+			const probe = await characterizeChosenModel(
+				plan.defaultLocalModel,
+				onProgress,
+			);
+			measured = probe ?? {};
+		}
+		const merged = { ...ov, ...measured };
+		if (Object.keys(merged).length) {
 			plan.modelProfileOverrides = {
-				[plan.defaultLocalModel.toLowerCase()]: ov,
+				[plan.defaultLocalModel.toLowerCase()]: merged,
 			};
+		}
 	}
 
 	onProgress?.({ stage: "building", message: "Building harness..." });

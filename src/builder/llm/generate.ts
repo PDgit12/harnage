@@ -298,6 +298,7 @@ Rules:
 - export exactly one async function named call(args: string[], context: unknown) returning { value: string }
 - args are the whitespace-split words after the command name
 - Only use Bun/Node built-ins (node:fs, node:path, node:child_process, fetch) and no other packages
+- Use the PROMISE APIs: import { readFile, writeFile } from "node:fs/promises" and await them. Never pass a callback to readFile/writeFile — the callback forms fail to compile here
 - Read any credentials from process.env and return a clear message when missing; never throw
 - The returned value is printed to the user; keep it concise plain text
 
