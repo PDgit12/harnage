@@ -48,6 +48,8 @@ export interface AcceptanceReport {
 	met: boolean;
 	/** Tasks excluded from scoring because the provider errored. */
 	errored?: number;
+	/** Scaffold overrides this run used, when the optimize loop supplied any. */
+	profile?: Record<string, unknown>;
 	tasks: AcceptanceTaskResult[];
 	/** Set when the run could not happen at all (provider down, no tasks). */
 	skipped?: string;
@@ -82,6 +84,10 @@ export async function runAcceptance(
 	tasks: AcceptanceTask[],
 	providerConfig: ProviderConfig,
 	onProgress?: (line: string) => void,
+	/** Scaffold overrides merged over the model's resolved profile. This is what
+	 *  lets the optimize loop re-run the SAME battery under a different scaffold
+	 *  without rebuilding the harness. */
+	profileOverride?: Record<string, unknown>,
 ): Promise<AcceptanceReport> {
 	const empty: AcceptanceReport = {
 		model: providerConfig.model,
@@ -114,7 +120,10 @@ export async function runAcceptance(
 		};
 	}
 
-	const profile = resolveProfile(providerConfig.model, 8192);
+	const profile = {
+		...resolveProfile(providerConfig.model, 8192),
+		...(profileOverride ?? {}),
+	};
 	const tools = await getAllTools();
 	const policy = {
 		mode: "default" as const,
@@ -196,6 +205,7 @@ export async function runAcceptance(
 		model: providerConfig.model,
 		tier,
 		loop: String(profile.loop ?? "unknown"),
+		profile: profileOverride,
 		passed,
 		total: scored.length,
 		errored,
@@ -247,4 +257,98 @@ ${
 			"/config.json` and re-run."
 }
 `;
+}
+
+/**
+ * Scaffold variants worth trying when a harness comes in below its bar.
+ *
+ * Derived from HOW it failed, not swept blindly: a full loop x edit-format
+ * sweep is four rebuilds of a battery that already costs minutes, and most of
+ * those combinations have nothing to do with the observed failure. Ordered by
+ * how often the change has actually helped.
+ */
+export function optimizationCandidates(
+	report: AcceptanceReport,
+): Array<{ label: string; override: Record<string, unknown> }> {
+	const failed = report.tasks.filter((t) => !t.pass && !t.errored);
+	const detail = failed
+		.map((t) => t.detail)
+		.join(" ")
+		.toLowerCase();
+	const out: Array<{ label: string; override: Record<string, unknown> }> = [];
+
+	// Describes the work instead of doing it — the single most common small-model
+	// failure, and the one the narration backstop exists for.
+	if (
+		/you (can|should|need to)|in your terminal|command like|echo /.test(detail)
+	) {
+		out.push({
+			label: "force action (nudge + fixed pipeline)",
+			override: { nudge: true, loop: "pipeline", temperature: 0 },
+		});
+	}
+
+	// Reaching for things it never observed, or picking the wrong tool: shrink
+	// what it can see and stop it improvising.
+	if (
+		/not (found|exist)|no such|cannot find|does not exist|unknown tool/.test(
+			detail,
+		)
+	) {
+		out.push({
+			label: "tighten grounding (fewer tools, temperature 0)",
+			override: { maxTools: 3, temperature: 0 },
+		});
+	}
+
+	// Nothing diagnostic in the failures — fall back to the tightest scaffold,
+	// which is the one that wins most often when the cause is unclear.
+	if (!out.length) {
+		out.push({
+			label: "tightest scaffold (pipeline, 3 tools, temperature 0)",
+			override: { loop: "pipeline", maxTools: 3, temperature: 0, nudge: true },
+		});
+	}
+	return out.slice(0, 2);
+}
+
+/**
+ * Re-run the battery under alternative scaffolds and keep the best.
+ *
+ * This is the step that makes a generated harness TUNED rather than merely
+ * tested: the user gets the scaffold that actually scored highest on their own
+ * domain tasks, on their own model, instead of the one a size tier guessed.
+ * Bounded to two extra attempts — the battery costs real minutes, and past two
+ * the returns stop justifying the wait.
+ */
+export async function optimizeAcceptance(
+	outputDir: string,
+	tasks: AcceptanceTask[],
+	providerConfig: ProviderConfig,
+	baseline: AcceptanceReport,
+	onProgress?: (line: string) => void,
+): Promise<{ best: AcceptanceReport; tried: number }> {
+	if (baseline.met || baseline.skipped || !tasks.length) {
+		return { best: baseline, tried: 0 };
+	}
+	let best = baseline;
+	let tried = 0;
+	for (const candidate of optimizationCandidates(baseline)) {
+		tried++;
+		onProgress?.(`  retry ${tried}: ${candidate.label}`);
+		const attempt = await runAcceptance(
+			outputDir,
+			tasks,
+			providerConfig,
+			onProgress,
+			candidate.override,
+		);
+		if (attempt.skipped) continue;
+		if (attempt.passed > best.passed) {
+			best = attempt;
+			onProgress?.(`  improved to ${attempt.passed}/${attempt.total}`);
+		}
+		if (best.met) break;
+	}
+	return { best, tried };
 }
