@@ -964,6 +964,19 @@ export function splitToolCallName(raw: string, input: Record<string, unknown>): 
   return { name, input };
 }
 
+/**
+ * OpenAI-compatible chat endpoint for a base URL, appending /v1 only when it
+ * isn't already there. Every provider documents its base WITH the version
+ * (https://api.groq.com/openai/v1, https://openrouter.ai/api/v1,
+ * https://api.openai.com/v1), so blindly appending "/v1/chat/completions"
+ * produced .../v1/v1/chat/completions and a 404 on the very first call — for the
+ * DEFAULT base URL too. Bases that omit it (a local proxy on :8080) still work.
+ */
+export function chatCompletionsUrl(baseUrl: string): string {
+  const base = baseUrl.replace(/\\/+$/, "");
+  return /\\/v\\d+$/.test(base) ? base + "/chat/completions" : base + "/v1/chat/completions";
+}
+
 /** Provider-side rejections of OUR tool payload (as opposed to a network or
  *  auth failure). These are recoverable: retry the turn without tool defs. */
 export function isToolFormatError(message: string): boolean {
@@ -1206,7 +1219,7 @@ export async function* streamProvider(
 ): AsyncGenerator<StreamEvent> {
   const isOllama = config.type === "ollama";
   const base = config.baseUrl || (isOllama ? "http://localhost:11434" : "https://openrouter.ai/api/v1");
-  const url = isOllama ? \`\${base}/api/chat\` : \`\${base}/v1/chat/completions\`;
+  const url = isOllama ? \`\${base.replace(/\\/+$/, "")}/api/chat\` : chatCompletionsUrl(base);
 
   // low temperature: agentic tool selection needs determinism, not creativity
   const temperature = opts?.temperature ?? 0.2;
