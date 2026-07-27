@@ -849,7 +849,7 @@ local Ollama instance:
 
 \`\`\`bash
 ollama serve                 # http://localhost:11434
-ollama pull qwen2.5:3b       # or your approved model, on a connected machine…
+ollama pull ${plan.defaultLocalModel ?? "qwen2.5:3b"}   # the model this harness was built and tested for
 \`\`\`
 
 For a fully air-gapped box: pull the model on a connected machine, copy the
