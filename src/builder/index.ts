@@ -154,6 +154,10 @@ export function generatePlan(spec: StructuredSpec): HarnessPlan {
  * error yields undefined and the caller keeps its catalog/size-tier defaults —
  * characterization can never make a build worse than skipping it.
  */
+/** Per-turn latency from the most recent characterization, used to predict how
+ *  long the acceptance battery will take. 0 when nothing was measured. */
+let lastMeasuredTurnMs = 0;
+
 async function characterizeChosenModel(
 	model: string,
 	onProgress?: (p: BuildProgress) => void,
@@ -179,6 +183,7 @@ async function characterizeChosenModel(
 			stage: "planning",
 			message: `Model profile: ${describeCharacterization(c)}`,
 		});
+		lastMeasuredTurnMs = c.medianMs;
 		return Object.keys(c.override).length
 			? (c.override as Record<string, unknown>)
 			: undefined;
@@ -560,9 +565,13 @@ async function runBuildAcceptance(
 	const { join } = await import("node:path");
 
 	onProgress?.({ stage: "verifying", message: "Planning acceptance tasks..." });
+	// Size the battery to the model's measured speed, so a slow model still
+	// finishes the build instead of spending forty minutes proving a point.
+	const { batterySizeFor } = await import("./acceptance-run");
+	const want = batterySizeFor(lastMeasuredTurnMs || 3000);
 	let tasks: Awaited<ReturnType<typeof runGenerateAcceptance>> = [];
 	try {
-		tasks = await runGenerateAcceptance(provider, plan, prompt);
+		tasks = await runGenerateAcceptance(provider, plan, prompt, want);
 	} catch (err) {
 		onProgress?.({
 			stage: "verifying",
@@ -601,9 +610,16 @@ async function runBuildAcceptance(
 	// a score attributed to the wrong model is worse than no score.
 	const builtFor = plan.defaultLocalModel;
 	const mismatch = builtFor && runtime.model !== builtFor;
+	// Say how long this will take before it starts. A build about to spend
+	// several minutes executing a battery should announce it rather than look
+	// like it has hung — the thoroughness is the point, the silence is not.
+	const { estimateBatteryMinutes, retriesFor } = await import(
+		"./acceptance-run"
+	);
+	const mins = estimateBatteryMinutes(tasks.length, lastMeasuredTurnMs || 3000);
 	onProgress?.({
 		stage: "verifying",
-		message: `Acceptance: ${tasks.length} tasks on ${runtime.model}...`,
+		message: `Acceptance: ${tasks.length} tasks on ${runtime.model} — roughly ${mins} min, up to ~${estimateBatteryMinutes(tasks.length, lastMeasuredTurnMs || 3000, 1 + retriesFor(lastMeasuredTurnMs || 3000))} min if it needs retuning...`,
 		detail: mismatch
 			? `NOTE: this harness was built for ${builtFor}, which is not installed. Pull it (ollama pull ${builtFor}) and re-run to score the model you will actually use.`
 			: undefined,
@@ -624,12 +640,14 @@ async function runBuildAcceptance(
 			stage: "verifying",
 			message: `Below bar — retuning the scaffold and re-running...`,
 		});
+		const { retriesFor } = await import("./acceptance-run");
 		const { best, tried } = await optimizeAcceptance(
 			outputDir,
 			tasks,
 			runtime,
 			report,
 			(line) => onProgress?.({ stage: "verifying", message: line }),
+			retriesFor(lastMeasuredTurnMs || 3000),
 		);
 		if (best.passed > report.passed && best.profile) {
 			// Persist the winner: rewrite profiles.ts so the delivered harness runs

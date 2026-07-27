@@ -267,6 +267,53 @@ ${
  * those combinations have nothing to do with the observed failure. Ordered by
  * how often the change has actually helped.
  */
+/**
+ * Rough wall-clock estimate for a battery, from the per-turn latency
+ * characterization already measured. Printed BEFORE the run: a build that is
+ * about to spend four minutes should say so, not leave the user guessing
+ * whether it has hung. Assumes ~3 turns per task, which is what the observed
+ * runs average.
+ */
+export function estimateBatteryMinutes(
+	taskCount: number,
+	medianTurnMs: number,
+	attempts = 1,
+): number {
+	const perTask = Math.max(medianTurnMs, 1500) * 3;
+	return Math.max(
+		0.1,
+		Math.round((taskCount * perTask * attempts) / 6000) / 10,
+	);
+}
+
+/**
+ * How many tasks fit a time budget at this model's measured speed.
+ *
+ * A fixed count is the wrong knob: 16 tasks is two minutes on a 3B and over
+ * ten on a 14B, and with retuning the 14B build passed forty minutes — far
+ * past "a few more minutes to know it is right". Scaling by measured latency
+ * keeps thoroughness where it is cheap and keeps the build finishing where it
+ * is not. Never below 6, or the battery stops characterising anything.
+ */
+/** Retries a model's speed can afford. A slow endpoint that needs retuning is
+ *  exactly where an unbounded loop turns a build into a coffee break, so the
+ *  slower the model, the fewer attempts it gets. */
+export function retriesFor(medianTurnMs: number): number {
+	if (medianTurnMs > 8000) return 1;
+	if (medianTurnMs > 4000) return 2;
+	return 3;
+}
+
+export function batterySizeFor(
+	medianTurnMs: number,
+	targetMinutes = 4,
+	max = 20,
+): number {
+	const perTaskMs = Math.max(medianTurnMs, 1500) * 3;
+	const fits = Math.floor((targetMinutes * 60_000) / perTaskMs);
+	return Math.max(6, Math.min(max, fits));
+}
+
 export function optimizationCandidates(
 	report: AcceptanceReport,
 ): Array<{ label: string; override: Record<string, unknown> }> {
@@ -309,7 +356,7 @@ export function optimizationCandidates(
 			override: { loop: "pipeline", maxTools: 3, temperature: 0, nudge: true },
 		});
 	}
-	return out.slice(0, 2);
+	return out.slice(0, 3);
 }
 
 /**
@@ -327,6 +374,7 @@ export async function optimizeAcceptance(
 	providerConfig: ProviderConfig,
 	baseline: AcceptanceReport,
 	onProgress?: (line: string) => void,
+	maxRetries = 3,
 ): Promise<{ best: AcceptanceReport; tried: number }> {
 	if (baseline.met || baseline.skipped || !tasks.length) {
 		return { best: baseline, tried: 0 };
@@ -334,6 +382,7 @@ export async function optimizeAcceptance(
 	let best = baseline;
 	let tried = 0;
 	for (const candidate of optimizationCandidates(baseline)) {
+		if (tried >= maxRetries) break;
 		tried++;
 		onProgress?.(`  retry ${tried}: ${candidate.label}`);
 		const attempt = await runAcceptance(
