@@ -106,16 +106,24 @@ async function runProbe(
 	timeoutMs: number,
 ): Promise<{ ok: boolean; ms: number } | null> {
 	const started = performance.now();
+	// The timer MUST be cleared when the probe wins the race. Left dangling it
+	// keeps an active handle for the full timeout (45s x 3 probes), which holds
+	// the event loop open long after the work is done — a build that has
+	// finished then sits there looking hung, and anything supervising it may
+	// reasonably decide to kill it.
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const result = await Promise.race([
 			completeText(provider, [{ role: "user", content: probe.prompt }]),
-			new Promise<never>((_, reject) =>
-				setTimeout(() => reject(new Error("probe timeout")), timeoutMs),
-			),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error("probe timeout")), timeoutMs);
+			}),
 		]);
 		return { ok: probe.pass(result.text), ms: performance.now() - started };
 	} catch {
 		return null;
+	} finally {
+		if (timer) clearTimeout(timer);
 	}
 }
 
