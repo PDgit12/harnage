@@ -156,7 +156,26 @@ add(
 	task,
 );
 
-// 5. No reply anywhere may mention harness internals.
+// 5. AUTONOMY: a multi-step goal — read, transform, produce an artifact — with
+// no hand-holding. This is the actual product claim. Not crashing is table
+// stakes; finishing a real job unattended is the thing being sold.
+const before = Date.now();
+const auto = await ask(
+	"Read notes/standup.md, then write a file called actions.txt containing one action item per line.",
+);
+const artifact = join(work, "actions.txt");
+const wrote = existsSync(artifact);
+const body = wrote ? await Bun.file(artifact).text() : "";
+add(
+	"autonomous multi-step task produces the artifact",
+	wrote && /ship|email|ops|build/i.test(body),
+	wrote
+		? `actions.txt = ${JSON.stringify(body.slice(0, 120))}`
+		: `no actions.txt; answer: ${auto.slice(0, 140)}`,
+);
+console.log(`    (${Math.round((Date.now() - before) / 1000)}s)`);
+
+// 6. No reply anywhere may mention harness internals.
 add(
 	"no harness internals leaked to the user",
 	![hi, cap, task].some((r) => INTERNALS.test(r)),
