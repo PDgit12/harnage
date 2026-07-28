@@ -1,7 +1,7 @@
 {
   "name": "harnage",
   "version": "0.6.0",
-  "description": "Describe an agent — own a Claude Code-level harness that amplifies your work on any model, even local, and consumes any MCP server. harnage augments your work, it never just automates it.",
+  "description": "Describe an agent \u2014 own a Claude Code-level harness that amplifies your work on any model, even local, and consumes any MCP server. harnage augments your work, it never just automates it.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -52,7 +52,8 @@
     "eval": "bun scripts/eval.ts",
     "eval:dry": "bun scripts/eval.ts --dry-run",
     "eval:build": "bun scripts/eval-build.ts",
-    "eval:build:dry": "bun scripts/eval-build.ts --dry-run"
+    "eval:build:dry": "bun scripts/eval-build.ts --dry-run",
+    "ux": "bun scripts/ux-smoke.ts --build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
