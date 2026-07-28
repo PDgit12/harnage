@@ -10,6 +10,7 @@ import type { ProjectContext } from "../spec/context";
 import {
 	ENGINE_TEMPLATE,
 	EXAMPLE_SKILL,
+	GATHER_SKILL,
 	GENERATED_TUI,
 	HARNESS_COMPACTION,
 	HARNESS_EVAL,
@@ -172,6 +173,12 @@ export async function assembleAndVerify(
 	await writeFile(
 		join(outputDir, "skills", "verify-before-done.md"),
 		EXAMPLE_SKILL(plan),
+	);
+	// Procedural memory for the task shape a small model most often gets wrong:
+	// producing an artifact from sources it never read.
+	await writeFile(
+		join(outputDir, "skills", "gather-before-writing.md"),
+		GATHER_SKILL,
 	);
 	// Bespoke skills (procedural memory) the build brain planned for this domain,
 	// rendered deterministically into the same frontmatter shape as the example.

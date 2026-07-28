@@ -933,6 +933,31 @@ or a direct check of the produced artifact) and quote the real output. Never
 claim success without evidence.
 `;
 
+/**
+ * PROCEDURAL memory every harness ships, alongside the identity facts seeded
+ * into the DB. Encodes the two failures actually measured on a 3B: it wrote an
+ * artifact before reading any source, and it wrote an EMPTY file. Triggers are
+ * deliberately broad because those are the verbs that precede both mistakes.
+ */
+export const GATHER_SKILL = `---
+name: gather-before-writing
+description: Read the sources before producing an artifact, and never write an empty file
+triggers: write, create, produce, save, output, summar, list, extract, prioriti, rank, report, draft
+---
+When the goal asks you to PRODUCE a file from information held elsewhere:
+
+1. Find and READ the source files first. Never write the output before you have
+   read something — an answer you did not gather is an answer you invented.
+2. The output file is not a source. Do not read the file you were asked to
+   create; it does not exist yet.
+3. Read EVERY candidate that could hold the answer, not just the first one.
+4. Decide from what you actually read. When ranking, rank by real consequence
+   (an outage or a blocked customer beats a routine chore), not by the order
+   items happen to appear in the file.
+5. Write the decided answer as the file CONTENT. A created-but-empty file is
+   not a completed task.
+`;
+
 export const PIPELINE_TEMPLATE = (
 	plan: HarnessPlan,
 ) => `// Builder-baked domain pipeline for the small-model tier (Engine v3). Stages
