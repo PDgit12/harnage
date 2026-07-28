@@ -1998,6 +1998,9 @@ export class LoopEngine {
     // answer is accepted — see the outcome block below.
     const wanted = requestedArtifact(goal);
     let outcomeForced = 0;
+    // Has the agent GATHERED anything yet? Writing an artifact it never read
+    // the inputs for is how an empty file gets produced.
+    let gathered = false;
     // Set for exactly one turn after an outcome refusal.
     let forceActNow = false;
     // Per-tool typed args (a oneOf grammar). Strictly stronger than the flat
@@ -2171,7 +2174,9 @@ export class LoopEngine {
             // removes another degree of freedom, ending with the literal JSON
             // to echo back — at which point there is nothing left to invent.
             const wantedContent = requiredContent(goal);
-            const nudge = outcomeForced === 1
+            const nudge = !gathered
+              ? \`You have not read anything yet, so you have nothing to write. "\${wanted}" is the OUTPUT — do not read it. First read the source files you were asked about, then write the answer.\`
+              : outcomeForced === 1
               ? \`The goal was to produce "\${wanted}" with real content, and it is missing or EMPTY. Creating a blank file is not doing the work. Call file_write now with the actual answer as the content.\`
               : outcomeForced === 2
                 ? \`"\${wanted}" STILL does not exist. You are not talking to a human who will run your command — YOU must write the file. Use tool "file_write" with args {"path":"\${wanted}","content":"<the exact content the goal asked for>"}.\`
@@ -2327,11 +2332,30 @@ export class LoopEngine {
 
       toolsUsed++;
       this.lastToolCalls++;
+      // A read of the TARGET artifact is not gathering — the observed failure
+      // began with file_read on urgent.txt, the file it was meant to create.
+      if (/^(file_read|grep|glob|web_fetch|bash)$/.test(name) &&
+          !(wanted && JSON.stringify(args).includes(wanted))) {
+        gathered = true;
+      }
       this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
       this.onEvent?.({ type: "tool_use", toolName: name, toolInput: args });
 
       const tool = resolveToolByName(this.tools, name);
       let output = "";
+      // Refuse a blank write outright. Observed three times in one run: the
+      // model called file_write with content:"" because it had never read the
+      // inputs, and a created-but-empty file looks like success to everything
+      // downstream. Rejecting it here turns a silent bad outcome into a
+      // corrective observation the model can act on.
+      if (tool && /^file_(write|edit)$/.test(tool.name) &&
+          typeof (args as { content?: unknown }).content === "string" &&
+          !((args as { content: string }).content).trim()) {
+        this.safety.recordFailure();
+        this.messages.push({ role: "assistant", content: JSON.stringify(decision) });
+        this.messages.push({ role: "user", content: "You tried to write an EMPTY file. That is not the task. Read the source files first, decide the answer, then write that answer as the content." });
+        continue;
+      }
       if (!tool) {
         output = \`Tool '\${name}' not found. Available: \${selected.map(t => t.name).join(", ")}\`;
         this.safety.recordFailure();
