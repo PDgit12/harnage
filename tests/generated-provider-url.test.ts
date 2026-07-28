@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ENGINE_TEMPLATE } from "../src/builder/assemble/harness-templates";
+import {
+	ENGINE_TEMPLATE,
+	GENERATED_TUI,
+} from "../src/builder/assemble/harness-templates";
 import type { HarnessPlan } from "../src/builder/index";
 
 // Regression: the generated engine hand-rolls its OpenAI-compatible endpoint
@@ -53,5 +56,33 @@ describe("generated engine builds a correct chat-completions URL", () => {
 
 	it("keeps the Ollama path unversioned", () => {
 		expect(engine).toContain("/api/chat");
+	});
+});
+
+// Every slash command in the generated TUI crashed with
+// "undefined is not an object (evaluating '(await matched.command.load()).default.call')"
+// because command modules export a NAMED `call`, not a default. The classic
+// REPL path always did the right thing, so the bug only hit the default UI.
+describe("generated TUI dispatches slash commands", () => {
+	const tui = GENERATED_TUI({
+		name: "t",
+		description: "d",
+		tools: [],
+		commands: [],
+		providers: ["ollama"],
+		systemPrompt: "",
+		hasMcp: false,
+	} as unknown as HarnessPlan);
+
+	it("no longer reads a non-existent default export", () => {
+		expect(tui).not.toContain("mod.default as {");
+	});
+
+	it("accepts a named call or a default export", () => {
+		expect(tui).toContain(".default ?? mod");
+	});
+
+	it("fails with a nameable error rather than a type crash", () => {
+		expect(tui).toContain("has no exported call()");
 	});
 });
