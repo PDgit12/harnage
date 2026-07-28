@@ -36,7 +36,12 @@ describe("small-model loop hardening", () => {
 		);
 		expect(code).toContain("!this.isSmallTalk(goal)) {");
 		// capability questions count as small talk too
-		expect(code).toContain("what (can|do) (u|you) do");
+		// Behaviour, not the literal regex source: the classifier was split into
+		// greeting and capability branches, and asserting on one branch's exact
+		// text broke a correct refactor. tests/generated-provider-url.test.ts
+		// executes the emitted classifier against real phrasings.
+		expect(code).toContain("private isSmallTalk");
+		expect(code).toContain("who are (u|you)");
 	});
 
 	it("pushes back on a final answer that promises future work", () => {

@@ -1974,7 +1974,14 @@ export class LoopEngine {
   private isSmallTalk(goal: string): boolean {
     const t = goal.trim().toLowerCase();
     if (t.split(/\\s+/).length > 8) return false;
-    return /^(hi|hello|hey|yo|sup|hiya|howdy|thanks|thank you|ty|ok|okay|cool|nice|good (morning|afternoon|evening|night)|how are you|what'?s up|who are you|help|what (can|do) (u|you) do( then)?|what are (u|you)( for)?)\\b[\\s!.?]*$/.test(t);
+    // Greetings and thanks.
+    if (/^(hi|hello|hey|yo|sup|hiya|howdy|thanks|thank you|ty|ok|okay|cool|nice|good (morning|afternoon|evening|night)|how are you|what'?s up)\\b[\\s!.?]*$/.test(t)) return true;
+    // CAPABILITY / META questions. These must never be answered with a tool:
+    // the small tier is told "you MUST use a tool, never answer from memory",
+    // so "what else can u do ??" was turned into a FILENAME and the agent tried
+    // to read notes/what_else_can_i_do.md. A question about the agent itself is
+    // answered from the system prompt, which already lists its purpose and tools.
+    return /^(who are (u|you)|what are (u|you)( for)?|help|what('| i)?s your (purpose|job|role)|what (else )?(can|could|do|should) (u|you) (do|help)|what (else )?(can|do) (u|you)( do)?|how (do|can) (i|u|you) (use|configure|set ?up) (u|you|this)|can (u|you) help)\\b[\\s!.?]*$/.test(t);
   }
 
   private async runDecisionLoop(goal: string, stageInstruction?: string): Promise<string> {

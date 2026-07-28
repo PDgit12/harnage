@@ -86,3 +86,52 @@ describe("generated TUI dispatches slash commands", () => {
 		expect(tui).toContain("has no exported call()");
 	});
 });
+
+// "what else can u do ??" was turned into a FILENAME — the agent tried to read
+// notes/what_else_can_i_do.md and reported it missing. The small tier is told
+// "you MUST use a tool, never answer from memory", so a question ABOUT THE
+// AGENT that isn't classified as small talk forces it to invent a file.
+describe("small-talk classifier covers capability questions", () => {
+	const engine = ENGINE_TEMPLATE({
+		name: "t",
+		description: "d",
+		tools: [],
+		commands: [],
+		providers: ["ollama"],
+		systemPrompt: "",
+		hasMcp: false,
+	} as unknown as HarnessPlan);
+
+	const isSmallTalk = (() => {
+		const m = engine.match(
+			/private isSmallTalk\(goal: string\): boolean \{([\s\S]*?)\n {2}\}/,
+		);
+		return new Function(
+			"goal",
+			(m as RegExpMatchArray)[1].replace(/\\\\/g, "\\"),
+		) as (g: string) => boolean;
+	})();
+
+	it("treats questions about the agent as small talk, never as a task", () => {
+		for (const q of [
+			"what else can u do ??",
+			"what can you do",
+			"who are you",
+			"help",
+			"how do i configure you",
+			"can u help",
+		]) {
+			expect(isSmallTalk(q), `"${q}" must not become a tool call`).toBe(true);
+		}
+	});
+
+	it("still treats real work as a task", () => {
+		for (const q of [
+			"read my meeting notes and prioritise them",
+			"summarise notes.md",
+			"create a file called out.txt",
+		]) {
+			expect(isSmallTalk(q), `"${q}" must run the agent`).toBe(false);
+		}
+	});
+});
