@@ -515,14 +515,29 @@ async function printBespokeSummary(outputDir: string): Promise<void> {
 	}
 }
 
+// Print the STACK, not just the message. A build that dies mid-run with a
+// bare one-line message is indistinguishable from one that vanished — the
+// user cannot report it and we cannot fix it. A stack makes the next
+// occurrence actionable on first sight.
+function fatalDetail(e: unknown): string {
+	if (e instanceof Error) {
+		const cause = (e as Error & { cause?: unknown }).cause;
+		return `${e.stack ?? `${e.name}: ${e.message}`}${cause ? `\ncaused by: ${cause instanceof Error ? (cause.stack ?? cause.message) : String(cause)}` : ""}`;
+	}
+	return String(e);
+}
+
 process.on("unhandledRejection", (reason) => {
-	console.error(
-		"Unhandled rejection:",
-		reason instanceof Error ? reason.message : reason,
-	);
+	// Not swallowed: an unhandled rejection during a build leaves the process in
+	// an unknown state, and continuing produced the "it just died silently"
+	// report. Fail loudly with a stack and a non-zero code instead.
+	console.error("\nUnhandled rejection — this is a bug, please report it:");
+	console.error(fatalDetail(reason));
+	process.exit(1);
 });
 process.on("uncaughtException", (err) => {
-	console.error("Uncaught exception:", err.message);
+	console.error("\nUncaught exception — this is a bug, please report it:");
+	console.error(fatalDetail(err));
 	process.exit(1);
 });
 
