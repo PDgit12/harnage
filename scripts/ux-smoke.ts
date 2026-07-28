@@ -62,9 +62,21 @@ const providerConfig = {
 // agent against their data, and grounding on its own source is a bug we shipped.
 const work = await mkdtemp(join(tmpdir(), "ux-work-"));
 await mkdir(join(work, "notes"), { recursive: true });
+// Deliberately NOT scriptable: three files, only one relevant. The right answer
+// needs judgement — pick the current notes over the decoys, then rank by real
+// urgency, not list order. The urgent item is LAST, and the 2019 archive holds
+// a literal "URGENT" decoy, so keyword matching gets it wrong.
 await writeFile(
 	join(work, "notes", "standup.md"),
-	"# Standup\n- ship the build\n- email ops\n",
+	"# Standup - today\n- reorder the office snacks\n- update the team photo on the wiki\n- PRODUCTION IS DOWN: payment gateway returning 500s, revenue blocked\n",
+);
+await writeFile(
+	join(work, "notes", "archive-2019.md"),
+	"# Old notes (archived 2019)\n- migrate CI\n- URGENT: fix the login bug before launch\n",
+);
+await writeFile(
+	join(work, "notes", "grocery.md"),
+	"# Personal\n- milk\n- bread\n",
 );
 
 interface Check {
@@ -152,7 +164,7 @@ add(
 const task = await ask("Read notes/standup.md and list the action items.");
 add(
 	"real task reads the user's data",
-	/ship|email|build|ops/i.test(task),
+	/snack|photo|payment|production/i.test(task),
 	task,
 );
 
@@ -161,17 +173,19 @@ add(
 // stakes; finishing a real job unattended is the thing being sold.
 const before = Date.now();
 const auto = await ask(
-	"Read notes/standup.md, then write a file called actions.txt containing one action item per line.",
+	"Look through my notes and write the single most urgent action item to urgent.txt. Only the one that matters most.",
 );
-const artifact = join(work, "actions.txt");
+const artifact = join(work, "urgent.txt");
 const wrote = existsSync(artifact);
 const body = wrote ? await Bun.file(artifact).text() : "";
 add(
-	"autonomous multi-step task produces the artifact",
-	wrote && /ship|email|ops|build/i.test(body),
+	"autonomous JUDGEMENT: right file, right priority",
+	wrote &&
+		/payment|production|down|500|gateway|revenue/i.test(body) &&
+		!/snack|photo|wiki|milk|bread|login bug|migrate/i.test(body),
 	wrote
-		? `actions.txt = ${JSON.stringify(body.slice(0, 120))}`
-		: `no actions.txt; answer: ${auto.slice(0, 140)}`,
+		? `urgent.txt = ${JSON.stringify(body.slice(0, 140))}`
+		: `no urgent.txt; answer: ${auto.slice(0, 140)}`,
 );
 console.log(`    (${Math.round((Date.now() - before) / 1000)}s)`);
 
