@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
-import { HARNESS_PERMISSIONS } from "../src/builder/assemble/harness-templates";
+import {
+	ENGINE_TEMPLATE,
+	HARNESS_PERMISSIONS,
+} from "../src/builder/assemble/harness-templates";
 
 // The permission module ships as a template string. Set HOME to a temp dir
 // BEFORE importing so POLICY_PATH resolves under it, then exercise the
@@ -128,16 +131,26 @@ describe("generated permissions — bash chaining guard", () => {
 describe("generated permissions — network egress gating", () => {
 	it("web_fetch/web_search need an explicit rule in default mode", () => {
 		const policy = { mode: "default", rules: [] };
-		expect(P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed).toBe(false);
-		expect(P.checkPermission(policy, "web_search", { pattern: "q" }).allowed).toBe(false);
+		expect(
+			P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed,
+		).toBe(false);
+		expect(
+			P.checkPermission(policy, "web_search", { pattern: "q" }).allowed,
+		).toBe(false);
 		// local reads stay allowed
-		expect(P.checkPermission(policy, "file_read", { path: "a.ts" }).allowed).toBe(true);
+		expect(
+			P.checkPermission(policy, "file_read", { path: "a.ts" }).allowed,
+		).toBe(true);
 	});
 
 	it("denies egress in plan mode even though it is 'read-only'", () => {
 		const policy = { mode: "plan", rules: [] };
-		expect(P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed).toBe(false);
-		expect(P.checkPermission(policy, "file_read", { path: "a.ts" }).allowed).toBe(true);
+		expect(
+			P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed,
+		).toBe(false);
+		expect(
+			P.checkPermission(policy, "file_read", { path: "a.ts" }).allowed,
+		).toBe(true);
 	});
 
 	it("honors an explicit egress allow rule", () => {
@@ -145,6 +158,34 @@ describe("generated permissions — network egress gating", () => {
 			mode: "default",
 			rules: [{ pattern: "web_fetch(*)", allow: true }],
 		};
-		expect(P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed).toBe(true);
+		expect(
+			P.checkPermission(policy, "web_fetch", { url: "http://x" }).allowed,
+		).toBe(true);
+	});
+});
+
+// P1 (codex map §6b): the model is told its own sandbox. Before this it
+// discovered the policy by being denied, then retried the same call.
+describe("generated harness — permission awareness in the prompt", () => {
+	const plan = { name: "testh" } as unknown as HarnessPlan;
+	const perms = HARNESS_PERMISSIONS(plan);
+
+	it("emits a prompt block per policy mode", () => {
+		expect(perms).toContain("export function permissionsPromptBlock");
+		expect(perms).toContain("READ-ONLY (plan mode)");
+		expect(perms).toContain("FULL ACCESS");
+		expect(perms).toContain("A denial is an answer, not an error");
+	});
+
+	it("lists the rules that are pre-approved and always refused", () => {
+		expect(perms).toContain('"\\nPre-approved: "');
+		expect(perms).toContain('"\\nAlways refused: "');
+	});
+
+	it("the engine puts it ahead of the repo docs so it survives truncation", () => {
+		const engine = ENGINE_TEMPLATE(plan);
+		expect(engine).toContain(
+			"return base + permissionsPromptBlock(this.policy) + projectInstructionsBlock();",
+		);
 	});
 });

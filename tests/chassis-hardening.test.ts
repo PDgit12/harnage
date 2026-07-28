@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
 import {
 	ENGINE_TEMPLATE,
+	HARNESS_INSTRUCTIONS,
 	HARNESS_SESSION,
 	HARNESS_TRACE,
 } from "../src/builder/assemble/harness-templates";
@@ -72,10 +73,44 @@ describe("chassis hardening — audit fixes in generated source", () => {
 		);
 	});
 
+	it("escalates on a FAILED OUTCOME, not only on a stuck loop", () => {
+		// measured on qwen2.5:3b: right judgement in the prose, urgent.txt never
+		// written — non-empty and un-"Stopped:", so the model chain never engaged
+		expect(engine).toContain("return !artifactProduced(this.activeGoal);");
+		// the artifact check is one helper, used by the in-loop force AND the
+		// post-run escalation gate
+		expect(engine).toContain("function artifactProduced(");
+		expect(engine).toContain("if (!artifactProduced(goal, wanted)) {");
+	});
+
 	it("#10 parses each streamed tool call's args in its own try", () => {
-		expect(engine).toContain(
-			"try { input = JSON.parse(a.args || ",
-		);
+		expect(engine).toContain("try { input = JSON.parse(a.args || ");
 		expect(engine).toContain("} catch { continue; }");
+	});
+});
+
+// P1 (codex map §6b): the generated harness now reads the USER's project
+// instructions. Before this it read none — an agent run inside a repo that
+// documents its conventions ignored them completely.
+describe("generated harness — project instructions", () => {
+	const instructions = HARNESS_INSTRUCTIONS;
+
+	it("emits an instructions module the engine imports", () => {
+		expect(instructions).toContain("export function projectInstructionsBlock");
+		expect(instructions).toContain('["AGENTS.md", "CLAUDE.md"]');
+		expect(engine).toContain(
+			'import { projectInstructionsBlock } from "./instructions.ts"',
+		);
+		expect(engine).toContain("+ projectInstructionsBlock();");
+	});
+
+	it("walks upward, stops at the git root, and orders deeper files last", () => {
+		expect(instructions).toContain('existsSync(join(dir, ".git"))');
+		// collected deepest-first, reversed so a deeper file's text wins
+		expect(instructions).toContain("return found.reverse();");
+	});
+
+	it("caps how much of a repo's docs can evict the agent's identity", () => {
+		expect(instructions).toContain("MAX_INSTRUCTION_CHARS = 6000");
 	});
 });

@@ -21,6 +21,7 @@ const args = process.argv.slice(2);
 // Soak mode. A single green run on a stochastic model proves almost nothing —
 // the question is whether it works RELIABLY, and an intermittent check is a
 // broken check. --runs N repeats the battery and reports a pass rate per check.
+const escIdx = args.indexOf("--escalate");
 const runsIdx = args.indexOf("--runs");
 const RUNS = runsIdx === -1 ? 1 : Math.max(1, Number(args[runsIdx + 1] ?? 1));
 const model = args.find((a) => a.includes(":")) ?? "qwen2.5:3b";
@@ -50,7 +51,20 @@ if (!existsSync(join(dir, "src/engine.ts"))) {
 	console.error(`not a generated harness: ${dir}`);
 	process.exit(1);
 }
-console.log(`Smoking ${dir}\n  model: ${model}\n`);
+// The model CHAIN a real build bakes in: same rule, so the soak measures what
+// ships instead of a lone 3B. --escalate <model> overrides; --escalate none off.
+const { strongerInstalledModel } = await import("../src/builder/models/catalog");
+const { listOllamaModels } = await import("../src/services/ollama/discovery");
+const ESCALATION =
+	escIdx === -1
+		? strongerInstalledModel(model, await listOllamaModels())
+		: args[escIdx + 1] === "none"
+			? undefined
+			: args[escIdx + 1];
+
+console.log(
+	`Smoking ${dir}\n  model: ${model}\n  escalation: ${ESCALATION ?? "(none)"}\n`,
+);
 
 const { getAllTools } = await import(join(dir, "src/tools.ts"));
 const { LoopEngine } = await import(join(dir, "src/engine.ts"));
@@ -112,7 +126,12 @@ async function ask(goal: string): Promise<string> {
 	const cwd = process.cwd();
 	try {
 		process.chdir(work);
+		// Exercise the model CHAIN the builder now bakes in: a small model that
+		// gets stuck escalates to a stronger installed one. Without this the soak
+		// tests a lone 3B and never touches the escalation path real harnesses
+		// ship with — measuring something users do not run.
 		const engine = new LoopEngine({
+			fallbackModel: ESCALATION,
 			tools,
 			providerConfig,
 			profile,
