@@ -12,6 +12,7 @@ import {
 	classifyDomain,
 	judgementWarning,
 	maxParamsForRam,
+	paramsOf,
 	recommendModels,
 } from "./models/catalog";
 import {
@@ -32,6 +33,11 @@ export interface HarnessPlan {
 	hasMcp: boolean;
 	/** Local model the generated harness defaults to (detected at build time). */
 	defaultLocalModel?: string;
+	/** A STRONGER installed model to escalate to when the default gets stuck.
+	 *  The engine has always supported this; nothing ever populated it, so the
+	 *  escalation path was dead code. Measured motivation: a 3B gathers badly
+	 *  and fails judgement tasks an 8B passes — escalating beats failing. */
+	escalationModel?: string;
 	/** Per-model scaffold overrides baked into profiles.ts (keyed by model id). */
 	modelProfileOverrides?: Record<string, unknown>;
 	/** Keyword-matched MCP server suggestions — always computed, shown regardless of accept/decline. */
@@ -512,6 +518,35 @@ export async function buildHarness(
 		);
 		if (warn) {
 			onProgress?.({ stage: "planning", message: `Note: ${warn}` });
+		}
+	}
+
+	// Build the model CHAIN: keep the cheap default for ordinary turns, and name
+	// a stronger installed model to fall back to when it gets stuck. Costs
+	// nothing until it is needed, and turns a hard failure into a slower success.
+	if (plan.defaultLocalModel) {
+		try {
+			const res = await fetch("http://localhost:11434/api/tags", {
+				signal: AbortSignal.timeout(2000),
+			});
+			const { models } = (await res.json()) as {
+				models?: Array<{ name: string }>;
+			};
+			const chosen = paramsOf(plan.defaultLocalModel);
+			const stronger = (models ?? [])
+				.map((m) => m.name)
+				.filter((n) => !/embed|llava|clip|moondream/i.test(n))
+				.filter((n) => paramsOf(n) > chosen)
+				.sort((a, b) => paramsOf(a) - paramsOf(b))[0];
+			if (stronger) {
+				plan.escalationModel = stronger;
+				onProgress?.({
+					stage: "planning",
+					message: `Escalation model: ${stronger} (used only when ${plan.defaultLocalModel} gets stuck)`,
+				});
+			}
+		} catch {
+			/* ollama unreachable — no chain, the harness still works */
 		}
 	}
 

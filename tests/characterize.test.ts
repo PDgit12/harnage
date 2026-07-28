@@ -22,12 +22,15 @@ describe("characterizeModel", () => {
 				if (p.includes("file_read"))
 					return '{"action":"tool","tool":"file_read","args":{"path":"a.ts"}}';
 				if (p.includes("formatName")) return "src/util/format.ts";
+				// The ranking probe: the consequential item is 3.
+				if (p.includes("most urgent")) return "3";
 				return '{"action":"tool","tool":"file_write","args":{"path":"hello.txt","content":"HELLO"}}';
 			}),
 		);
 		expect(c.json).toBe(true);
 		expect(c.pathFidelity).toBe(true);
 		expect(c.acts).toBe(true);
+		expect(c.ranks).toBe(true);
 		// A capable model must not be "fixed".
 		expect(c.override).toEqual({});
 	});

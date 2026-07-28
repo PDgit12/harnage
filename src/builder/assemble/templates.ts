@@ -356,7 +356,7 @@ async function startRepl(resume = false): Promise<void> {
     // continue it immediately — the transcript already holds all prior steps.
     if (resumeGoal) {
       console.log(chalk.yellow(\`Resuming unfinished task: "\${resumeGoal.slice(0, 120)}"\`));
-      const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
+      const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile, fallbackModel: ESCALATION_MODEL });
       const result = await engine.run("Continue the unfinished task from this transcript exactly where it left off: " + resumeGoal);
       initialMessages = engine.getMessages();
       console.log(result);
@@ -462,7 +462,7 @@ async function startRepl(resume = false): Promise<void> {
           }
         } else if (trimmed) {
           console.log(chalk.dim(\`[Processing: \${config.model}]\\n\`));
-          const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile });
+          const engine = new LoopEngine({ tools, providerConfig: config, skills, initialMessages, profile, fallbackModel: ESCALATION_MODEL });
           activeEngine = engine;
           try {
             const result = await engine.run(trimmed);
@@ -541,6 +541,10 @@ async function startMcpServer(): Promise<void> {
 }
 
 // ─── Entry ───────────────────────────────────────────────────────
+
+// A stronger installed model, chosen at build time. The engine escalates to it
+// only after the default gets stuck — cheap turns stay cheap.
+const ESCALATION_MODEL = ${JSON.stringify(plan.escalationModel ?? undefined)};
 
 const program = new Command();
 program.name("${plan.name}").description(${JSON.stringify(plan.description)}).version(pkg.version).option("--mcp", "Run as MCP server").option("--resume", "Resume the previous session").option("--classic", "Use the classic readline REPL instead of the TUI").action(async (opts) => {
