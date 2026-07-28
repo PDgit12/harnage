@@ -220,6 +220,25 @@ const MAX_EPISODIC = 5000;
 export interface RecalledFact { subject: string; fact: string; }
 export interface RecalledEvent { event: string; occurred_at: string; }
 
+/** What this harness is, written into memory at first open. Derived from the
+ *  build — the user's own words for what they asked for. */
+const IDENTITY: Array<[string, string]> = ${JSON.stringify([
+	["purpose", plan.description ?? "an agent"],
+	["name", plan.name ?? "agent"],
+	[
+		"capabilities",
+		`I can use these tools: ${(plan.tools ?? []).join(", ") || "none"}`,
+	],
+	...((plan.customCommands ?? []).length
+		? [
+				[
+					"commands",
+					`I have these bespoke commands: ${(plan.customCommands ?? []).map((c) => `/${c.name}`).join(", ")}`,
+				] as [string, string],
+			]
+		: []),
+])};
+
 export class MemoryStore {
   private db: Database | null = null;
 
@@ -233,6 +252,18 @@ export class MemoryStore {
       const db = new Database(DB_PATH);
       db.run("CREATE TABLE IF NOT EXISTS semantic (subject TEXT NOT NULL, fact TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (subject, fact))");
       db.run("CREATE TABLE IF NOT EXISTS episodic (event TEXT NOT NULL, occurred_at TEXT NOT NULL, created_at TEXT NOT NULL)");
+      // IDENTITY SEED. Memory learned from runs but started life not knowing
+      // what this harness is FOR, so turn one had no more context than a blank
+      // agent. The build-time answers — the prompt, the domain knowledge, the
+      // capabilities — are exactly the durable facts a user expects it to
+      // "remember", so they are written once, at first open, from the plan.
+      // Same PRIMARY KEY as everything else, so re-opening is a no-op.
+      for (const [subject, fact] of IDENTITY) {
+        db.run(
+          "INSERT OR IGNORE INTO semantic (subject, fact, updated_at) VALUES (?, ?, ?)",
+          [subject, fact, new Date().toISOString()],
+        );
+      }
       this.db = db;
       return db;
     } catch {
