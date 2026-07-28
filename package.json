@@ -53,7 +53,8 @@
     "eval:dry": "bun scripts/eval.ts --dry-run",
     "eval:build": "bun scripts/eval-build.ts",
     "eval:build:dry": "bun scripts/eval-build.ts --dry-run",
-    "ux": "bun scripts/ux-smoke.ts --build"
+    "ux": "bun scripts/ux-smoke.ts --build",
+    "ux:soak": "bun scripts/ux-smoke.ts --build --runs 10"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

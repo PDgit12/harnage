@@ -2150,8 +2150,15 @@ export class LoopEngine {
             const { existsSync, readFileSync } = await import("node:fs");
             const abs = (await import("node:path")).resolve(process.cwd(), wanted);
             if (existsSync(abs)) {
+              const written = readFileSync(abs, "utf-8");
               const need = requiredContent(goal);
-              produced = !need || readFileSync(abs, "utf-8").includes(need);
+              // An EMPTY artifact is never a completed outcome, whatever the
+              // goal said. Observed: asked for the single most urgent action
+              // item, a 3B created urgent.txt and left it blank — the shape of
+              // an answer with none of the substance — and an exists-only check
+              // called that done. Content is the deliverable; the file is just
+              // where it goes.
+              produced = written.trim().length > 0 && (!need || written.includes(need));
             }
           } catch { produced = true; /* can't check — don't block on it */ }
           if (!produced) {
@@ -2165,7 +2172,7 @@ export class LoopEngine {
             // to echo back — at which point there is nothing left to invent.
             const wantedContent = requiredContent(goal);
             const nudge = outcomeForced === 1
-              ? \`The goal was to create "\${wanted}", and that file does not exist. Describing a shell command is not creating it. Call the file_write tool now.\`
+              ? \`The goal was to produce "\${wanted}" with real content, and it is missing or EMPTY. Creating a blank file is not doing the work. Call file_write now with the actual answer as the content.\`
               : outcomeForced === 2
                 ? \`"\${wanted}" STILL does not exist. You are not talking to a human who will run your command — YOU must write the file. Use tool "file_write" with args {"path":"\${wanted}","content":"<the exact content the goal asked for>"}.\`
                 : \`Return EXACTLY this and nothing else: {"action":"tool","tool":"file_write","args":{"path":"\${wanted}","content":\${JSON.stringify(wantedContent ?? "<the content the goal specified>")}}}\`;
