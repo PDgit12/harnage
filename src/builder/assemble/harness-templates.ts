@@ -612,6 +612,31 @@ export function checkPermission(
       ' — e.g. { "pattern": "' + toolName + '(*)", "allow": true }',
   };
 }
+
+/**
+ * Tell the model what it is actually allowed to do. Without this the agent
+ * discovers its own sandbox by being denied: it tries a write in plan mode, is
+ * refused, apologises, and re-tries the same call — burning turns to learn a
+ * fact the harness knew before the run started.
+ *
+ * One short paragraph per mode. Cheap enough for the small tier's ~1.6k budget,
+ * and the modes are the only thing a model needs to plan around.
+ */
+export function permissionsPromptBlock(policy: PermissionPolicy): string {
+  const allowed = policy.rules.filter(r => r.allow).map(r => r.pattern);
+  const denied = policy.rules.filter(r => !r.allow).map(r => r.pattern);
+  const mode =
+    policy.mode === "plan"
+      ? "READ-ONLY (plan mode). You may read, search and inspect, but every tool that changes state is refused. Do not attempt writes or commands — produce the plan or the answer from what you can read."
+      : policy.mode === "auto" || policy.mode === "bypass"
+        ? "FULL ACCESS. Every tool runs without asking. You are responsible for not taking destructive actions the user did not ask for."
+        : "DEFAULT. Reads are always allowed. A tool that changes state runs only if a rule allows it; otherwise the user is asked, once, and may approve it for the session. A denial is an answer, not an error — do not retry the same call, either pick a different approach or say what you need.";
+  return (
+    "\\n\\n## What you are allowed to do\\n" + mode +
+    (allowed.length ? "\\nPre-approved: " + allowed.join(", ") : "") +
+    (denied.length ? "\\nAlways refused: " + denied.join(", ") : "")
+  );
+}
 `;
 
 export const HARNESS_SKILLS = `// Skills-as-markdown: drop .md files in skills/ to teach the agent workflows.
@@ -958,6 +983,215 @@ When the goal asks you to PRODUCE a file from information held elsewhere:
    not a completed task.
 `;
 
+/**
+ * PROJECT INSTRUCTIONS — the user's own AGENTS.md / CLAUDE.md, which nothing in
+ * the generated harness read before this. An agent run inside a repo that
+ * documents its conventions was ignoring them entirely.
+ *
+ * Precedence follows the AGENTS.md spec: a file's scope is the directory tree
+ * rooted at the folder holding it, and a deeper file overrides a shallower one.
+ * So the walk goes cwd → up, and the emitted block is ordered shallowest FIRST
+ * — later text wins, and the deepest file is the last thing the model reads.
+ *
+ * Bounded on purpose: a small model's whole prompt budget is ~1.6k chars, so an
+ * unbounded repo doc would evict the agent's own identity.
+ */
+export const HARNESS_INSTRUCTIONS = `import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+/** Filenames treated as project instructions, in priority order within a directory. */
+export const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
+
+/** Total characters of project instruction text allowed into the prompt. */
+export const MAX_INSTRUCTION_CHARS = 6000;
+
+export interface ProjectInstruction { path: string; text: string; }
+
+/** Walk cwd upward collecting instruction files. Stops at the git root (or the
+ * filesystem root): directories above the repo are not this project. */
+export function findProjectInstructions(startDir: string): ProjectInstruction[] {
+  const found: ProjectInstruction[] = [];
+  let dir = startDir;
+  for (let depth = 0; depth < 24; depth++) {
+    for (const name of INSTRUCTION_FILES) {
+      const p = join(dir, name);
+      try {
+        if (existsSync(p) && statSync(p).isFile()) {
+          const text = readFileSync(p, "utf-8").trim();
+          if (text) found.push({ path: p, text });
+          break; // one file per directory — AGENTS.md wins over CLAUDE.md
+        }
+      } catch { /* unreadable — treat as absent */ }
+    }
+    if (existsSync(join(dir, ".git"))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Collected deepest-first; emit shallowest-first so deeper overrides.
+  return found.reverse();
+}
+
+/** The prompt block, or "" when the project documents nothing. */
+export function projectInstructionsBlock(startDir: string = process.cwd()): string {
+  const found = findProjectInstructions(startDir);
+  if (found.length === 0) return "";
+  let budget = MAX_INSTRUCTION_CHARS;
+  const parts: string[] = [];
+  for (const f of found) {
+    if (budget <= 0) break;
+    const body = f.text.length > budget ? f.text.slice(0, budget) + "\\n…(truncated)" : f.text;
+    budget -= body.length;
+    parts.push("### " + f.path + "\\n" + body);
+  }
+  return (
+    "\\n\\n## Project instructions\\n" +
+    "These are the user's own instructions for this repository. Follow them for every file you " +
+    "touch under their directory. A deeper file overrides a shallower one, and a direct " +
+    "instruction from the user overrides both.\\n\\n" +
+    parts.join("\\n\\n")
+  );
+}
+`;
+
+/**
+ * BUNDLED SKILL LIBRARY — procedural memory for the task shapes every agent
+ * meets, adapted from OpenHarness (MIT) and the codex review rubric
+ * (Apache-2.0). See THIRD_PARTY.md.
+ *
+ * These are not prose: `triggers` is the routing key, and `matchSkills()` only
+ * injects a skill whose trigger appears in the goal, so a 3B pays for at most
+ * the one procedure it needs. Kept short for the same reason — the small tier's
+ * whole system prompt budget is ~1.6k characters.
+ */
+export const BUNDLED_SKILLS: Array<{ slug: string; md: string }> = [
+	{
+		slug: "plan-before-acting",
+		md: `---
+name: plan-before-acting
+description: Break a multi-step job into ordered, verifiable steps before touching anything
+triggers: plan, design, implement, build, refactor, migrate, architect, add feature
+---
+For work that takes more than one step, plan first — then execute the plan.
+
+1. State the goal in one line, and what "done" looks like as something checkable.
+2. Read before proposing. Never plan a change to code you have not read.
+3. Break it into steps that are each verifiable on their own. Order them by
+   dependency, not by how they occurred to you.
+4. Execute the steps. Mark one step in progress at a time, finish it, then move.
+
+A good plan names concrete files and checks:
+  1. Add CLI entry with file args  2. Parse markdown via the existing helper
+  3. Handle code blocks and links  4. Add error handling for invalid files
+
+A bad plan restates the request:
+  1. Create the tool  2. Make it work  3. Check it looks good
+
+Do not plan single-step work. Do it.
+`,
+	},
+	{
+		slug: "investigate-failure",
+		md: `---
+name: investigate-failure
+description: Find the root cause of an error before changing anything
+triggers: bug, error, fail, failing, broken, crash, exception, why, debug, wrong, not working
+---
+Diagnose, then fix. A change made before the cause is known is a guess.
+
+1. Read the actual error — the message, the stack, the exit code. Do not search
+   the codebase before you have read what it says.
+2. Locate the real code path: \`grep\` for the message, then \`file_read\` the hit.
+   Confirm it is the code that actually ran.
+3. Form one hypothesis and CHECK it against the code or a command's output
+   before you act on it.
+4. Fix the cause, not the symptom, with the smallest change that does it.
+5. Re-run the thing that failed. Quote the output.
+
+Never attribute a failure to the model, the library, or the environment before
+you have instrumented it. If two attempts failed the same way, stop repeating
+them and say what you tried.
+`,
+	},
+	{
+		slug: "review-code",
+		md: `---
+name: review-code
+description: Review a change and report only defects a real author would fix
+triggers: review, audit, diff, pull request, pr, critique, check my
+---
+You are reviewing a change made by another engineer.
+
+Flag something only when ALL of these hold:
+1. It meaningfully affects correctness, security, performance or maintainability.
+2. It is discrete and actionable — not "this file is messy".
+3. It was introduced by THIS change (pre-existing issues are out of scope).
+4. It does not rest on unstated assumptions about intent.
+5. The author would fix it if they saw it.
+
+For each finding: where it is, what breaks, and the concrete input or state that
+triggers it. One short paragraph, no code blocks longer than three lines, no
+praise, no severity inflation. Ignore style unless it changes meaning.
+
+If nothing meets the bar, say so. A review with no findings is a valid review.
+`,
+	},
+	{
+		slug: "simplify",
+		md: `---
+name: simplify
+description: Cut a change down to the smallest thing that works
+triggers: simplify, cleanup, clean up, refactor, reduce, shorter, over-engineered
+---
+The best code is the code not written.
+
+- Does this need to exist at all? Speculative need — skip it, say so.
+- Does the standard library or an already-installed dependency do it? Use it.
+- Can it be one function instead of an abstraction? One function.
+- No interface with one implementation, no config for a value that never changes.
+
+Delete before you add. Touch only what the task requires — do not "improve"
+adjacent code, comments, or formatting. Never simplify away input validation at
+a trust boundary, error handling that prevents data loss, or anything the user
+explicitly asked for.
+`,
+	},
+	{
+		slug: "test-changes",
+		md: `---
+name: test-changes
+description: Prove a change works with a real check, not an assertion of success
+triggers: test, verify, check, prove, coverage, does it work
+---
+"It works" is a claim that needs output behind it.
+
+1. Find how this project runs its tests before writing one — \`glob\` for existing
+   test files and match their framework, layout and naming.
+2. Cover the behaviour that would actually break: the edge case, the error path,
+   the boundary. A test that only exercises the happy path proves little.
+3. Run it. Quote the real output, including failures.
+4. A failing test is information. Report it — never describe a failing run as done.
+`,
+	},
+	{
+		slug: "commit-changes",
+		md: `---
+name: commit-changes
+description: Write a commit that explains why, and never commit secrets
+triggers: commit, git, stage, changelog, message
+---
+1. Read the diff (\`bash\` → git diff) before describing it. Never commit files
+   you have not looked at.
+2. Never commit credentials, API keys, tokens or .env files. Check the diff for
+   them explicitly.
+3. Subject: one line, imperative, under ~60 characters, saying what changed.
+4. Body only when the "why" is not obvious from the diff. Explain the reason,
+   not a restatement of the code.
+5. Do not commit unrelated changes together. One commit, one intent.
+`,
+	},
+];
+
 export const PIPELINE_TEMPLATE = (
 	plan: HarnessPlan,
 ) => `// Builder-baked domain pipeline for the small-model tier (Engine v3). Stages
@@ -971,16 +1205,17 @@ export const ENGINE_TEMPLATE = (
 	plan: HarnessPlan,
 ) => `// Goal-driven loop engine with compaction, permissions, session persistence,
 // and skills support. Extracted so sub-agents can spawn engines too.
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Tool, ToolContext } from "./Tool.ts";
 import { compactMessages, estimateTokens } from "./compaction.ts";
 import { judgeRequest, parseJudgeScore, runDeterministicEvals } from "./eval.ts";
 import { MemoryStore } from "./memory.ts";
-import { checkPermission, loadPolicy, type PermissionPolicy, savePolicy, targetOf } from "./permissions.ts";
+import { checkPermission, loadPolicy, type PermissionPolicy, permissionsPromptBlock, savePolicy, targetOf } from "./permissions.ts";
 import { PIPELINE } from "./pipeline.ts";
 import { type ModelProfile, resolveProfile } from "./profiles.ts";
+import { projectInstructionsBlock } from "./instructions.ts";
 import { saveSession } from "./session.ts";
 import { matchSkills, skillsPromptBlock, type Skill } from "./skills.ts";
 
@@ -1320,6 +1555,28 @@ function requiredContent(goal: string): string | null {
   return m?.[1]?.trim() || null;
 }
 
+/**
+ * Did the goal's named artifact actually get produced? Missing or empty is a
+ * FAILED outcome no matter how confident the prose that came back — existence
+ * alone is not enough (a "touch" satisfies that and leaves the file blank), and
+ * when the goal pins the content, the content is the outcome.
+ *
+ * Goals that name no artifact return true: nothing to check, nothing changes.
+ * An unreadable path also returns true — an fs error is not evidence of failure.
+ */
+function artifactProduced(goal: string, wanted = requestedArtifact(goal)): boolean {
+  if (!wanted) return true;
+  try {
+    const abs = resolve(process.cwd(), wanted);
+    if (!existsSync(abs)) return false;
+    const written = readFileSync(abs, "utf-8");
+    const need = requiredContent(goal);
+    return written.trim().length > 0 && (!need || written.includes(need));
+  } catch {
+    return true;
+  }
+}
+
 interface Decision { action: "tool" | "final"; tool?: string; args?: Record<string, unknown>; answer?: string; }
 
 /** Parse a (possibly prose-wrapped) decision object; null if unrecoverable. */
@@ -1596,8 +1853,9 @@ export interface EngineConfig {
    * default mode; the UI resolves allow (once) / deny / always (remember). */
   onPermissionRequest?: (req: { tool: string; input: unknown; reason: string }) => Promise<"allow" | "deny" | "always">;
   /** Opt-in escalation: when a small/mid loop gets stuck (safety-stopped,
-   * errored, or empty), retry once with plan-act — and, if set, swap to this
-   * stronger model for the retry. Off by default; no extra RAM unless used. */
+   * errored, or empty) OR fails the outcome check (the goal named an artifact
+   * and it is missing or empty), retry once with plan-act — and, if set, swap
+   * to this stronger model for the retry. Off by default; no RAM unless used. */
   fallbackModel?: string;
 }
 
@@ -1698,7 +1956,8 @@ export class LoopEngine {
       }
     }
     let result = await this.dispatch(goal);
-    // Router fallback: a stuck small/mid loop gets one escalated retry.
+    // Router fallback: a stuck OR outcome-failed small/mid loop gets one
+    // escalated retry.
     if (this.shouldEscalate(result)) result = await this.escalate(goal);
     // Consolidation: after a successful reply, extract durable facts + dated
     // events into the semantic/episodic store. Best-effort, never throws.
@@ -1799,14 +2058,19 @@ export class LoopEngine {
     return this.runDecisionLoop(goal);
   }
 
-  /** A result signals a stuck loop when it was safety-stopped, errored, or came
-   * back empty. Only low tiers escalate, and only once. A confidently-wrong
-   * answer is NOT detectable here — that needs a verify pass, not a retry. */
+  /** A run needs escalating when it was safety-stopped, errored, came back
+   * empty — or FAILED THE OUTCOME: the goal named an artifact and the run ended
+   * without it. Stuck-ness alone was too narrow: measured on qwen2.5:3b, the
+   * model picked the right item ("PRODUCTION IS DOWN…"), never wrote
+   * urgent.txt through 3 forced attempts, and returned that as confident prose
+   * — non-empty and un-"Stopped:", so the chain never engaged on the one wrong
+   * answer the harness can actually PROVE wrong. Only low tiers, only once. */
   private shouldEscalate(result: string): boolean {
     if (this.escalated) return false;
     if (this.profile.tier !== "small" && this.profile.tier !== "mid") return false;
     const r = result.trim();
-    return r.length === 0 || /^Stopped:|^Error:/.test(r);
+    if (r.length === 0 || /^Stopped:|^Error:/.test(r)) return true;
+    return !artifactProduced(this.activeGoal);
   }
 
   /** Retry the goal once with more structure (plan-act) and, if configured, a
@@ -2211,25 +2475,11 @@ export class LoopEngine {
         if (wanted && outcomeForced < MAX_OUTCOME_FORCES && this.tools.length > 0) {
           // Existence is not enough. Observed: after the write was refused, the
           // model ran "touch hello.txt", which satisfied an exists-only check
-          // and let a FALSE success through — the file was empty. When the goal
-          // pins the content, the content is the outcome.
-          let produced = false;
-          try {
-            const { existsSync, readFileSync } = await import("node:fs");
-            const abs = (await import("node:path")).resolve(process.cwd(), wanted);
-            if (existsSync(abs)) {
-              const written = readFileSync(abs, "utf-8");
-              const need = requiredContent(goal);
-              // An EMPTY artifact is never a completed outcome, whatever the
-              // goal said. Observed: asked for the single most urgent action
-              // item, a 3B created urgent.txt and left it blank — the shape of
-              // an answer with none of the substance — and an exists-only check
-              // called that done. Content is the deliverable; the file is just
-              // where it goes.
-              produced = written.trim().length > 0 && (!need || written.includes(need));
-            }
-          } catch { produced = true; /* can't check — don't block on it */ }
-          if (!produced) {
+          // and let a FALSE success through — the file was empty. An EMPTY
+          // artifact is never a completed outcome, whatever the goal said: a 3B
+          // asked for the single most urgent action item created urgent.txt and
+          // left it blank — the shape of an answer with none of the substance.
+          if (!artifactProduced(goal, wanted)) {
             outcomeForced++;
             forceActNow = true;
             this.safety.recordFailure();
@@ -2581,10 +2831,15 @@ export class LoopEngine {
       join(process.cwd(), ".harnage", "system.md"),
       join(homedir(), ".${plan.name}", "system.md"),
     ];
+    let base = "";
     for (const p of paths) {
-      try { return await import("node:fs/promises").then(fs => fs.readFile(p, "utf-8")); } catch { /* try next */ }
+      try { base = await import("node:fs/promises").then(fs => fs.readFile(p, "utf-8")); break; } catch { /* try next */ }
     }
-    return "";
+    // Then what the agent may do (short, always relevant — kept ahead of the
+    // repo docs so the small tier's budget truncates those first), then the
+    // user's own AGENTS.md/CLAUDE.md, which qualifies the identity above it
+    // without being able to replace it.
+    return base + permissionsPromptBlock(this.policy) + projectInstructionsBlock();
   }
 }
 `;

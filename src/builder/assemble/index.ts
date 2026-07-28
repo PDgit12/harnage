@@ -8,12 +8,14 @@ import { generateToolFiles } from "../generate/tool-generator";
 import type { HarnessPlan } from "../index";
 import type { ProjectContext } from "../spec/context";
 import {
+	BUNDLED_SKILLS,
 	ENGINE_TEMPLATE,
 	EXAMPLE_SKILL,
 	GATHER_SKILL,
 	GENERATED_TUI,
 	HARNESS_COMPACTION,
 	HARNESS_EVAL,
+	HARNESS_INSTRUCTIONS,
 	HARNESS_MCP_CLIENT,
 	HARNESS_MEMORY,
 	HARNESS_PERMISSIONS,
@@ -165,6 +167,7 @@ export async function assembleAndVerify(
 	await writeFile(join(srcDir, "trace.ts"), HARNESS_TRACE(plan));
 	await writeFile(join(srcDir, "permissions.ts"), HARNESS_PERMISSIONS(plan));
 	await writeFile(join(srcDir, "skills.ts"), HARNESS_SKILLS);
+	await writeFile(join(srcDir, "instructions.ts"), HARNESS_INSTRUCTIONS);
 	await writeFile(join(srcDir, "session.ts"), HARNESS_SESSION(plan));
 	await writeFile(join(srcDir, "subagent.ts"), HARNESS_SUBAGENT);
 	await writeFile(join(srcDir, "mcp-client.ts"), HARNESS_MCP_CLIENT(plan));
@@ -180,6 +183,12 @@ export async function assembleAndVerify(
 		join(outputDir, "skills", "gather-before-writing.md"),
 		GATHER_SKILL,
 	);
+	// Bundled skill library: procedural memory for the task shapes every agent
+	// meets (plan, investigate, review, simplify, test, commit). Routed by the
+	// same trigger match as the rest, so a small model pays only for a hit.
+	for (const skill of BUNDLED_SKILLS) {
+		await writeFile(join(outputDir, "skills", `${skill.slug}.md`), skill.md);
+	}
 	// Bespoke skills (procedural memory) the build brain planned for this domain,
 	// rendered deterministically into the same frontmatter shape as the example.
 	for (const skill of plan.customSkills ?? []) {

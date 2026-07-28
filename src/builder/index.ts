@@ -12,8 +12,8 @@ import {
 	classifyDomain,
 	judgementWarning,
 	maxParamsForRam,
-	paramsOf,
 	recommendModels,
+	strongerInstalledModel,
 } from "./models/catalog";
 import {
 	type McpRecommendation,
@@ -532,12 +532,10 @@ export async function buildHarness(
 			const { models } = (await res.json()) as {
 				models?: Array<{ name: string }>;
 			};
-			const chosen = paramsOf(plan.defaultLocalModel);
-			const stronger = (models ?? [])
-				.map((m) => m.name)
-				.filter((n) => !/embed|llava|clip|moondream/i.test(n))
-				.filter((n) => paramsOf(n) > chosen)
-				.sort((a, b) => paramsOf(a) - paramsOf(b))[0];
+			const stronger = strongerInstalledModel(
+				plan.defaultLocalModel,
+				(models ?? []).map((m) => m.name),
+			);
 			if (stronger) {
 				plan.escalationModel = stronger;
 				onProgress?.({

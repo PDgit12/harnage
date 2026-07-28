@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HarnessPlan } from "../src/builder";
 import {
+	BUNDLED_SKILLS,
 	EXAMPLE_SKILL,
 	HARNESS_SKILLS,
 } from "../src/builder/assemble/harness-templates";
@@ -22,7 +23,12 @@ writeFileSync(
 	EXAMPLE_SKILL({ name: "demoharness" } as HarnessPlan),
 );
 
-type Skill = { name: string; description: string; triggers: string[]; body: string };
+type Skill = {
+	name: string;
+	description: string;
+	triggers: string[];
+	body: string;
+};
 const S = (await import(modFile)) as {
 	loadSkills: (dir?: string) => Promise<Skill[]>;
 	matchSkills: (skills: Skill[], goal: string) => Skill[];
@@ -53,16 +59,52 @@ describe("EXAMPLE_SKILL — field Defect C", () => {
 	it("has real triggers so it is no longer always-active", () => {
 		expect(verify?.triggers.length).toBeGreaterThan(0);
 		// a memory/recall goal must NOT pull in the verify skill (the repro goal)
-		expect(S.matchSkills(skills, "remember that my favorite color is teal")).toHaveLength(0);
+		expect(
+			S.matchSkills(skills, "remember that my favorite color is teal"),
+		).toHaveLength(0);
 		// an action goal still gets it
-		expect(S.matchSkills(skills, "build a commit-message parser").map((s) => s.name)).toContain(
-			"verify-before-done",
-		);
+		expect(
+			S.matchSkills(skills, "build a commit-message parser").map((s) => s.name),
+		).toContain("verify-before-done");
 	});
 
 	it("never injects the attribution into the assembled system-prompt block", () => {
 		const block = S.skillsPromptBlock(skills);
 		expect(block).not.toContain("teach it your workflows");
 		expect(block).not.toContain("demoharness");
+	});
+});
+
+// P1 (codex map §6b): the bundled skill library. Two skills was not procedural
+// memory, it was a sample. Adapted from OpenHarness (MIT) + the codex review
+// rubric (Apache-2.0).
+describe("bundled skill library", () => {
+	it("ships the six task shapes every agent meets", () => {
+		expect(BUNDLED_SKILLS.map((s) => s.slug).sort()).toEqual([
+			"commit-changes",
+			"investigate-failure",
+			"plan-before-acting",
+			"review-code",
+			"simplify",
+			"test-changes",
+		]);
+	});
+
+	it("every skill parses as frontmatter with routable triggers", () => {
+		for (const s of BUNDLED_SKILLS) {
+			expect(s.md.startsWith("---\n")).toBe(true);
+			const fm = s.md.slice(4, s.md.indexOf("\n---", 4));
+			expect(fm).toContain(`name: ${s.slug}`);
+			expect(fm).toContain("description: ");
+			const triggers = fm.match(/^triggers: (.+)$/m)?.[1] ?? "";
+			expect(
+				triggers.split(",").filter((t) => t.trim()).length,
+			).toBeGreaterThan(2);
+		}
+	});
+
+	it("stays inside the small tier's prompt budget per skill", () => {
+		// ~1.6k chars is the whole small-tier system prompt; one skill must not eat it
+		for (const s of BUNDLED_SKILLS) expect(s.md.length).toBeLessThan(1200);
 	});
 });

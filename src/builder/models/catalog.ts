@@ -410,6 +410,21 @@ export function paramsOf(id: string): number {
 	return 0;
 }
 
+/** The escalation link in the model chain: the SMALLEST installed model that is
+ * larger than `current`. Non-text models are excluded — a vision or embedding
+ * model is not a stronger reasoner. Undefined when nothing bigger is installed.
+ * Pure, so the builder and the soak pick the same fallback from the same rule. */
+export function strongerInstalledModel(
+	current: string,
+	installed: string[],
+): string | undefined {
+	const chosen = paramsOf(current);
+	return installed
+		.filter((n) => !/embed|llava|clip|moondream/i.test(n))
+		.filter((n) => paramsOf(n) > chosen)
+		.sort((a, b) => paramsOf(a) - paramsOf(b))[0];
+}
+
 export function inferFamily(id: string): FamilyInfo {
 	const lower = id.toLowerCase();
 	const params = paramsOf(id);
