@@ -1996,8 +1996,17 @@ export class LoopEngine {
   private async decisionSystem(goal: string, toolList: string, stageInstruction?: string): Promise<string> {
     const base = (await this.loadSystemPrompt()).slice(0, this.profile.systemPromptBudget);
     const smallTalk = this.isSmallTalk(goal);
+    // Skills were injected ONLY in runFree — the native path used by frontier
+    // and strong models. Small and mid tiers, which run this constrained-json
+    // loop, never saw a single skill: a 70B got the procedures and a 3B, which
+    // needs them far more, got none. Shipping gather-before-writing changed
+    // nothing for exactly this reason.
+    const skillBlock = this.isSmallTalk(goal)
+      ? ""
+      : skillsPromptBlock(matchSkills(this.skills, goal));
     return [
       base,
+      skillBlock,
       \`Goal: \${goal}\`,
       stageInstruction ? \`Current step: \${stageInstruction}\` : "",
       smallTalk ? SMALLTALK_RULES : DECISION_RULES,
