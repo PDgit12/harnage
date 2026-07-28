@@ -252,6 +252,55 @@ export const CATALOG: CatalogEntry[] = [
 	},
 ];
 
+/**
+ * MEASURED judgement threshold, not a guess. Same harness, same adversarial
+ * fixture (three files, only one relevant, the urgent item last, an "URGENT:"
+ * decoy in an archive), scripts/judgement-matrix.ts:
+ *
+ *   qwen2.5-coder:1.5b  small   constrained-json  FAIL  wrote an instruction
+ *   qwen2.5:3b          small   constrained-json  FAIL  wrote an empty file
+ *   llama3:latest (8B)  mid     constrained-json  PASS  "PRODUCTION IS DOWN…"
+ *   qwen2.5:14b         strong  NATIVE            FAIL  wrote an empty file
+ *
+ * The 14B result is CONFOUNDED and deliberately not treated as capability
+ * evidence: it is the only model here on native tool-calling, and native was
+ * separately measured at 7/20 against constrained-json's 14/20 on the code
+ * suite. Its failure is at least as likely to be dispatch as ranking. Re-run it
+ * with constrained-json forced before drawing any conclusion about >=13B.
+ *
+ * What IS supported: at 1.5B and 3B the model reads, searches, edits and
+ * reports reliably (the runtime path scores 100% at 3B) but does not RANK —
+ * it picks the first item rather than the most important one — and harness
+ * work does not close it, since the 3B fails with the procedure explicitly in
+ * its prompt. 8B clears it. So the warning below is conservative: it fires
+ * only under 8B, where the evidence is unambiguous.
+ */
+export const JUDGEMENT_MIN_PARAMS = 8;
+
+/** Domains whose core job is ranking or deciding, not retrieving. */
+const JUDGEMENT_DOMAINS: WorkType[] = ["review", "data"];
+
+/**
+ * Warning to show BEFORE a build when the chosen model is too small for what
+ * the harness is for. Empty when there is nothing to warn about — the point is
+ * an honest heads-up at the moment of choice, not a blanket disclaimer.
+ */
+export function judgementWarning(
+	modelId: string,
+	domain: WorkType,
+	purpose = "",
+): string {
+	const params = paramsOf(modelId);
+	if (params === 0 || params >= JUDGEMENT_MIN_PARAMS) return "";
+	const judgementShaped =
+		JUDGEMENT_DOMAINS.includes(domain) ||
+		/priorit|rank|urgen|decide|choose|triage|most important|assess|judge/i.test(
+			purpose,
+		);
+	if (!judgementShaped) return "";
+	return `${modelId} is ${params}B. Measured: models under ${JUDGEMENT_MIN_PARAMS}B reliably read, search and write, but do NOT reliably RANK — they pick the first item rather than the most important one. This harness's job involves prioritising, so consider an 8B or larger.`;
+}
+
 /** RAM ceiling on parameter count — mirrors the runtime speed-first caps. */
 export function maxParamsForRam(ramGb: number): number {
 	if (ramGb >= 96) return 70;
