@@ -2016,7 +2016,11 @@ export class LoopEngine {
     // they assume a conventional src/ layout and read (or conclude absence on)
     // files that aren't there — the dominant domain-task failure. Handing over
     // the actual cwd filenames once removes the guess.
+    // NOT for small talk: "hi" got answered with "you have quite a few
+    // TypeScript and configuration files" because the listing was injected
+    // regardless, so the model treated the harness's own source as the subject.
     if ((this.profile.tier === "small" || this.profile.tier === "mid") &&
+        !this.isSmallTalk(goal) &&
         !this.messages.some(m => typeof m.content === "string" && m.content.startsWith("Files in the working directory:"))) {
       try {
         // RECURSIVE, not one level. A flat listing names the directory "src"
@@ -2026,7 +2030,19 @@ export class LoopEngine {
         // nested paths removes the guess entirely. Bounded so a big repo can't
         // blow the small-model context.
         const { readdirSync } = await import("node:fs");
-        const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
+        // The harness's OWN source is not the user's data. Run from its install
+        // directory it would otherwise ground on itself and answer questions
+        // about skills/verify-before-done.md and its own tsconfig — leaking
+        // internals and mistaking its scaffolding for the task.
+        const SKIP = new Set([
+          "node_modules", ".git", "dist", "build", ".next", "coverage",
+          "skills", "src", "tests",
+        ]);
+        const SKIP_FILES = new Set([
+          "package.json", "bun.lock", "tsconfig.json", "vitest.config.ts",
+          "DEPLOY.md", "SECURITY.md", "ACCEPTANCE.md", "acceptance.json",
+          "mcp.json", "mcp.json.example",
+        ]);
         const paths: string[] = [];
         const walk = (rel: string, depth: number): void => {
           if (depth > 3 || paths.length >= 80) return;
@@ -2036,6 +2052,7 @@ export class LoopEngine {
           for (const e of entries) {
             if (paths.length >= 80) return;
             if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+            if (!rel && SKIP_FILES.has(e.name)) continue;
             const p = rel ? \`\${rel}/\${e.name}\` : e.name;
             if (e.isDirectory()) walk(p, depth + 1);
             else paths.push(p);
