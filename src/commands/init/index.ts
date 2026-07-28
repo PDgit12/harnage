@@ -61,6 +61,36 @@ async function runBuild(
 
 		if (result.success) {
 			lines.push(chalk.green.bold("✓ Build Complete"));
+			// A silent fallback is a lie by omission: the user asked for a bespoke
+			// harness, got the generic keyword chassis (no interview, no bespoke
+			// tools or commands), and the output looked identical. Observed live —
+			// a rate-limited build brain produced a 9s "successful" build the user
+			// reasonably believed was custom.
+			if (result.usedLLM === false) {
+				lines.push("");
+				lines.push(
+					chalk.yellow.bold(
+						"  ⚠ Built with the OFFLINE chassis — this is NOT a bespoke harness.",
+					),
+				);
+				lines.push(
+					chalk.yellow(
+						"    No interview ran, and no domain-specific tools or commands were generated.",
+					),
+				);
+				if (result.fallbackReason) {
+					lines.push(
+						chalk.dim(
+							`    Build brain unavailable: ${result.fallbackReason.slice(0, 160)}`,
+						),
+					);
+				}
+				lines.push(
+					chalk.dim(
+						"    Fix the build brain (/config or a working API key) and re-run for the real thing.",
+					),
+				);
+			}
 			if (result.repairs) {
 				lines.push(
 					chalk.dim(
