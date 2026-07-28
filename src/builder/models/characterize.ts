@@ -31,6 +31,8 @@ export interface Characterization {
 	pathFidelity: boolean;
 	/** Kept to a single action instead of narrating a plan. */
 	acts: boolean;
+	/** Picked the consequential item over the first-listed one. */
+	ranks: boolean;
 	/** Median probe latency, ms — feeds the tool-budget decision. */
 	medianMs: number;
 	/** Probes that actually returned; 0 means the model was unreachable. */
@@ -95,6 +97,24 @@ const PROBES: Probe[] = [
 			} catch {
 				return false;
 			}
+		},
+	},
+	{
+		id: "ranks",
+		// Measures ISOLATED ranking only, and it does NOT discriminate on the
+		// failure that matters: qwen2.5:3b PASSES this probe and still fails the
+		// real judgement task. Handed three items directly it ranks fine; what it
+		// cannot do is GATHER from several files and THEN rank. A single turn
+		// cannot test gathering, so this flag must never be used to claim a model
+		// can do judgement work — it is recorded because a model that fails even
+		// this is unfit for anything requiring a decision.
+		prompt:
+			"Three tasks:\n1. reorder the office snacks\n2. update the team photo\n3. production is down, payments failing for all customers\n\nReply with ONLY the number of the single most urgent one.",
+		pass: (raw) => {
+			const t = raw.trim();
+			// Accept "3", "3." etc; reject an answer that leads with 1 or 2.
+			const first = t.match(/[123]/)?.[0];
+			return first === "3";
 		},
 	},
 ];
@@ -170,6 +190,7 @@ export async function characterizeModel(
 		nativeTools: false,
 		pathFidelity: flags.pathFidelity ?? false,
 		acts: flags.acts ?? false,
+		ranks: flags.ranks ?? false,
 		medianMs,
 		completed,
 		override: {},
@@ -202,6 +223,13 @@ export async function characterizeModel(
 		override.loop = "pipeline";
 	}
 
+	// Fails even isolated ranking — a much lower bar than the real task. Keep
+	// sampling deterministic; nothing else in the scaffold helps a model that
+	// cannot pick the consequential item from a list of three.
+	if (!characterization.ranks) {
+		override.temperature = 0;
+	}
+
 	// Slow endpoint: fewer tools means shorter prompts and fewer turns, which is
 	// the only lever the harness has over wall-clock time.
 	if (medianMs > 12_000) {
@@ -220,6 +248,7 @@ export function describeCharacterization(c: Characterization): string {
 		`json ${c.json ? "ok" : "weak"}`,
 		`paths ${c.pathFidelity ? "ok" : "weak"}`,
 		`acts ${c.acts ? "ok" : "weak"}`,
+		`ranks ${c.ranks ? "ok" : "WEAK"}`,
 		`~${Math.round(c.medianMs / 100) / 10}s/turn`,
 	].join(" · ");
 	const tuned = Object.keys(c.override).length;
