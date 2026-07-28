@@ -10,6 +10,7 @@ import type { AskFn } from "./llm/interview";
 import {
 	catalogOverrides,
 	classifyDomain,
+	judgementWarning,
 	maxParamsForRam,
 	recommendModels,
 } from "./models/catalog";
@@ -496,6 +497,21 @@ export async function buildHarness(
 			plan.modelProfileOverrides = {
 				[plan.defaultLocalModel.toLowerCase()]: merged,
 			};
+		}
+	}
+
+	// Warn at the moment of choice, not after the harness disappoints. Measured
+	// threshold (scripts/judgement-matrix.ts): under 8B a model reads, searches
+	// and writes reliably but does not RANK — it picks the first item rather
+	// than the most important one, and no amount of harness work closes it.
+	if (plan.defaultLocalModel) {
+		const warn = judgementWarning(
+			plan.defaultLocalModel,
+			classifyDomain(`${plan.description} ${prompt}`),
+			prompt,
+		);
+		if (warn) {
+			onProgress?.({ stage: "planning", message: `Note: ${warn}` });
 		}
 	}
 
