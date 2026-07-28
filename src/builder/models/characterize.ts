@@ -136,9 +136,16 @@ export async function characterizeModel(
 	opts?: { timeoutMs?: number },
 ): Promise<Characterization> {
 	const timeoutMs = opts?.timeoutMs ?? 45_000;
-	const results = await Promise.all(
-		PROBES.map((p) => runProbe(provider, p, timeoutMs).then((r) => ({ p, r }))),
-	);
+	// SEQUENTIAL, not Promise.all. Three concurrent generations against a large
+	// local model mean three simultaneous loads of the same weights on the same
+	// box — the memory and CPU spike lands in the middle of a build that is also
+	// running bun install and tsc, and the process gets killed with no error.
+	// Characterization is three short turns; it is not worth racing.
+	const results: Array<{ p: Probe; r: { ok: boolean; ms: number } | null }> =
+		[];
+	for (const p of PROBES) {
+		results.push({ p, r: await runProbe(provider, p, timeoutMs) });
+	}
 
 	const flags: Record<string, boolean> = {};
 	const latencies: number[] = [];
