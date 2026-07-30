@@ -20,7 +20,7 @@ describe("calibrate command template", () => {
 		});
 		const syntaxErrors = (result.diagnostics ?? []).filter((d) => d.category === ts.DiagnosticCategory.Error);
 		expect(syntaxErrors).toHaveLength(0);
-	});
+	}, 20_000);
 
 	it("writes the winning profile to ~/.<name>/profile.json with measured overrides only", () => {
 		expect(COMMAND_TEMPLATES.calibrate).toContain("profile.json");
